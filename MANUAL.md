@@ -249,12 +249,14 @@ npm install agentfs-sdk
 ```typescript
 import { AgentFS } from 'agentfs-sdk';
 
-// Open agent filesystem with persistent storage
+// Using id (creates .agentfs/my-agent.db)
 const agent = await AgentFS.open({ id: 'my-agent' });
-// Creates: .agentfs/my-agent.db
 
-// Or use ephemeral in-memory database
-const ephemeralAgent = await AgentFS.open();
+// Using id with custom path
+const agent2 = await AgentFS.open({ id: 'my-agent', path: './data/mydb.db' });
+
+// Using path only
+const agent3 = await AgentFS.open({ path: './data/mydb.db' });
 
 // Key-value operations
 await agent.kv.set('user:name', 'Alice');
@@ -295,17 +297,20 @@ AgentFS.open(options?: AgentFSOptions): Promise<AgentFS>
 Opens or creates an agent filesystem.
 
 **Parameters:**
-- `options?: AgentFSOptions` - Optional configuration
-  - `id?: string` - Agent identifier (creates `.agentfs/{id}.db`)
-  - If no options provided, uses ephemeral in-memory database
+- `options: AgentFSOptions` - Configuration (at least `id` or `path` required)
+  - `id?: string` - Agent identifier (if no `path`, creates `.agentfs/{id}.db`)
+  - `path?: string` - Explicit database path (takes precedence over id-based path)
 
 **Examples:**
 ```typescript
-// Persistent storage with agent ID
+// Using id (creates .agentfs/my-agent.db)
 const agent = await AgentFS.open({ id: 'my-agent' });
 
-// Ephemeral in-memory database
-const temp = await AgentFS.open();
+// Using id with custom path
+const agent2 = await AgentFS.open({ id: 'my-agent', path: './data/mydb.db' });
+
+// Using path only
+const agent3 = await AgentFS.open({ path: './data/mydb.db' });
 ```
 
 **Properties:**
@@ -320,9 +325,12 @@ const temp = await AgentFS.open();
 **AgentFSOptions Interface:**
 ```typescript
 interface AgentFSOptions {
-  id?: string;  // Optional agent identifier
+  id?: string;    // Agent identifier (if no path, creates .agentfs/{id}.db)
+  path?: string;  // Explicit database path (takes precedence over id-based path)
 }
 ```
+
+Note: At least one of `id` or `path` must be provided.
 
 #### Key-Value Store API
 

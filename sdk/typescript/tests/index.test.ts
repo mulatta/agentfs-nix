@@ -24,11 +24,18 @@ describe('AgentFS Integration Tests', () => {
       expect(agent).toBeInstanceOf(AgentFS);
     });
 
-    it('should initialize with ephemeral in-memory database', async () => {
-      const memoryAgent = await AgentFS.open();
-      expect(memoryAgent).toBeDefined();
-      expect(memoryAgent).toBeInstanceOf(AgentFS);
-      await memoryAgent.close();
+    it('should initialize with explicit path', async () => {
+      const pathAgent = await AgentFS.open({ path: ':memory:' });
+      expect(pathAgent).toBeDefined();
+      expect(pathAgent).toBeInstanceOf(AgentFS);
+      await pathAgent.close();
+    });
+
+    it('should require at least id or path', async () => {
+      // @ts-expect-error - Testing runtime validation for JS users
+      await expect(AgentFS.open({})).rejects.toThrow(
+        "AgentFS.open() requires at least 'id' or 'path'"
+      );
     });
 
     it('should allow multiple instances with different ids', async () => {

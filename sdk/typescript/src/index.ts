@@ -9,13 +9,17 @@ import { ToolCalls } from './toolcalls';
  */
 export interface AgentFSOptions {
   /**
-   * Optional unique identifier for the agent.
-   * - If provided: Creates persistent storage at `.agentfs/{id}.db`
-   * - If omitted: Uses ephemeral in-memory database
+   * Unique identifier for the agent.
+   * - If provided without `path`: Creates storage at `.agentfs/{id}.db`
+   * - If provided with `path`: Uses the specified path
    */
   id?: string;
-  // Future: sync configuration will be added here
-  // sync?: SyncConfig;
+  /**
+   * Explicit path to the database file.
+   * - If provided: Uses the specified path directly
+   * - Can be combined with `id`
+   */
+  path?: string;
 }
 
 export class AgentFS {
@@ -37,44 +41,41 @@ export class AgentFS {
 
   /**
    * Open an agent filesystem
-   * @param options Configuration options (optional id for persistent storage)
+   * @param options Configuration options (id and/or path required)
    * @returns Fully initialized AgentFS instance
    * @example
    * ```typescript
-   * // Persistent storage
+   * // Using id (creates .agentfs/my-agent.db)
    * const agent = await AgentFS.open({ id: 'my-agent' });
-   * // Creates: .agentfs/my-agent.db
    *
-   * // Ephemeral in-memory database
-   * const agent = await AgentFS.open();
+   * // Using id with custom path
+   * const agent = await AgentFS.open({ id: 'my-agent', path: './data/mydb.db' });
+   *
+   * // Using path only
+   * const agent = await AgentFS.open({ path: './data/mydb.db' });
    * ```
    */
-  static async open(options?: AgentFSOptions): Promise<AgentFS> {
-    // Error handling for old API usage
-    if (typeof options === 'string') {
+  static async open(options: AgentFSOptions): Promise<AgentFS> {
+    const { id, path } = options;
+
+    // Require at least id or path
+    if (!id && !path) {
+      throw new Error("AgentFS.open() requires at least 'id' or 'path'.");
+    }
+
+    // Validate agent ID if provided
+    if (id && !/^[a-zA-Z0-9_-]+$/.test(id)) {
       throw new Error(
-        `AgentFS.open() no longer accepts string paths. ` +
-        `Please use: AgentFS.open({ id: 'your-id' }) for persistent storage, ` +
-        `or AgentFS.open() for ephemeral in-memory database.`
+        'Agent ID must contain only alphanumeric characters, hyphens, and underscores'
       );
     }
 
-    const { id } = options || {};
-
-    // Determine database path based on id
+    // Determine database path: explicit path takes precedence, otherwise use id-based path
     let dbPath: string;
-    if (!id) {
-      // No id = ephemeral in-memory database
-      dbPath = ':memory:';
+    if (path) {
+      dbPath = path;
     } else {
-      // Validate agent ID to prevent path traversal attacks
-      if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
-        throw new Error(
-          'Agent ID must contain only alphanumeric characters, hyphens, and underscores'
-        );
-      }
-
-      // Ensure .agentfs directory exists
+      // id is guaranteed to be defined here (we checked !id && !path above)
       const dir = '.agentfs';
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
