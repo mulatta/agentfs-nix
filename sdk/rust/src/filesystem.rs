@@ -15,6 +15,7 @@ const DEFAULT_FILE_MODE: u32 = S_IFREG | 0o644; // Regular file, rw-r--r--
 const DEFAULT_DIR_MODE: u32 = S_IFDIR | 0o755; // Directory, rwxr-xr-x
 
 const ROOT_INO: i64 = 1;
+const DEFAULT_CHUNK_SIZE: usize = 4096;
 
 /// File statistics
 #[derive(Debug, Clone)]
@@ -48,128 +49,156 @@ impl Stats {
 #[derive(Clone)]
 pub struct Filesystem {
     conn: Arc<Connection>,
+    chunk_size: usize,
 }
 
 impl Filesystem {
     /// Create a new filesystem
     pub async fn new(db_path: &str) -> Result<Self> {
         let db = Builder::new_local(db_path).build().await?;
-        let conn = db.connect()?;
-        let fs = Self {
-            conn: Arc::new(conn),
-        };
-        fs.initialize().await?;
-        Ok(fs)
+        let conn = Arc::new(db.connect()?);
+        Self::from_connection(conn).await
     }
 
     /// Create a filesystem from an existing connection
     pub async fn from_connection(conn: Arc<Connection>) -> Result<Self> {
-        let fs = Self { conn };
-        fs.initialize().await?;
+        // Initialize schema first
+        Self::initialize_schema(&conn).await?;
+
+        // Get chunk_size from config (or use default)
+        let chunk_size = Self::read_chunk_size(&conn).await?;
+
+        let fs = Self { conn, chunk_size };
         Ok(fs)
     }
 
-    /// Initialize the database schema
-    async fn initialize(&self) -> Result<()> {
-        // Create inode table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS fs_inode (
-                    ino INTEGER PRIMARY KEY AUTOINCREMENT,
-                    mode INTEGER NOT NULL,
-                    uid INTEGER NOT NULL DEFAULT 0,
-                    gid INTEGER NOT NULL DEFAULT 0,
-                    size INTEGER NOT NULL DEFAULT 0,
-                    atime INTEGER NOT NULL,
-                    mtime INTEGER NOT NULL,
-                    ctime INTEGER NOT NULL
-                )",
-                (),
-            )
-            .await?;
-
-        // Create directory entry table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS fs_dentry (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    parent_ino INTEGER NOT NULL,
-                    ino INTEGER NOT NULL,
-                    UNIQUE(parent_ino, name)
-                )",
-                (),
-            )
-            .await?;
-
-        // Create index for efficient path lookups
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_fs_dentry_parent
-                ON fs_dentry(parent_ino, name)",
-                (),
-            )
-            .await?;
-
-        // Create data blocks table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS fs_data (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ino INTEGER NOT NULL,
-                    offset INTEGER NOT NULL,
-                    size INTEGER NOT NULL,
-                    data BLOB NOT NULL
-                )",
-                (),
-            )
-            .await?;
-
-        // Create index for efficient data block lookups
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_fs_data_ino_offset
-                ON fs_data(ino, offset)",
-                (),
-            )
-            .await?;
-
-        // Create symlink table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS fs_symlink (
-                    ino INTEGER PRIMARY KEY,
-                    target TEXT NOT NULL
-                )",
-                (),
-            )
-            .await?;
-
-        // Ensure root directory exists
-        self.ensure_root().await?;
-
-        Ok(())
+    /// Get the configured chunk size
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
     }
 
-    /// Ensure root directory exists
-    async fn ensure_root(&self) -> Result<()> {
-        let mut rows = self
-            .conn
+    /// Initialize the database schema
+    async fn initialize_schema(conn: &Connection) -> Result<()> {
+        // Create config table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fs_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            (),
+        )
+        .await?;
+
+        // Create inode table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fs_inode (
+                ino INTEGER PRIMARY KEY AUTOINCREMENT,
+                mode INTEGER NOT NULL,
+                uid INTEGER NOT NULL DEFAULT 0,
+                gid INTEGER NOT NULL DEFAULT 0,
+                size INTEGER NOT NULL DEFAULT 0,
+                atime INTEGER NOT NULL,
+                mtime INTEGER NOT NULL,
+                ctime INTEGER NOT NULL
+            )",
+            (),
+        )
+        .await?;
+
+        // Create directory entry table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fs_dentry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                parent_ino INTEGER NOT NULL,
+                ino INTEGER NOT NULL,
+                UNIQUE(parent_ino, name)
+            )",
+            (),
+        )
+        .await?;
+
+        // Create index for efficient path lookups
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fs_dentry_parent
+            ON fs_dentry(parent_ino, name)",
+            (),
+        )
+        .await?;
+
+        // Create data chunks table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fs_data (
+                ino INTEGER NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                data BLOB NOT NULL,
+                PRIMARY KEY (ino, chunk_index)
+            )",
+            (),
+        )
+        .await?;
+
+        // Create symlink table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fs_symlink (
+                ino INTEGER PRIMARY KEY,
+                target TEXT NOT NULL
+            )",
+            (),
+        )
+        .await?;
+
+        // Ensure chunk_size config exists
+        let mut rows = conn
+            .query("SELECT value FROM fs_config WHERE key = 'chunk_size'", ())
+            .await?;
+
+        if rows.next().await?.is_none() {
+            conn.execute(
+                "INSERT INTO fs_config (key, value) VALUES ('chunk_size', ?)",
+                (DEFAULT_CHUNK_SIZE.to_string(),),
+            )
+            .await?;
+        }
+
+        // Ensure root directory exists
+        let mut rows = conn
             .query("SELECT ino FROM fs_inode WHERE ino = ?", (ROOT_INO,))
             .await?;
 
         if rows.next().await?.is_none() {
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-            self.conn
-                .execute(
-                    "INSERT INTO fs_inode (ino, mode, uid, gid, size, atime, mtime, ctime)
-                    VALUES (?, ?, 0, 0, 0, ?, ?, ?)",
-                    (ROOT_INO, DEFAULT_DIR_MODE as i64, now, now, now),
-                )
-                .await?;
+            conn.execute(
+                "INSERT INTO fs_inode (ino, mode, uid, gid, size, atime, mtime, ctime)
+                VALUES (?, ?, 0, 0, 0, ?, ?, ?)",
+                (ROOT_INO, DEFAULT_DIR_MODE as i64, now, now, now),
+            )
+            .await?;
         }
 
         Ok(())
+    }
+
+    /// Read chunk size from config
+    async fn read_chunk_size(conn: &Connection) -> Result<usize> {
+        let mut rows = conn
+            .query("SELECT value FROM fs_config WHERE key = 'chunk_size'", ())
+            .await?;
+
+        if let Some(row) = rows.next().await? {
+            let value = row
+                .get_value(0)
+                .ok()
+                .and_then(|v| match v {
+                    Value::Text(s) => s.parse::<usize>().ok(),
+                    Value::Integer(i) => Some(i as usize),
+                    _ => None,
+                })
+                .unwrap_or(DEFAULT_CHUNK_SIZE);
+            Ok(value)
+        } else {
+            Ok(DEFAULT_CHUNK_SIZE)
+        }
     }
 
     /// Normalize a path
@@ -543,14 +572,16 @@ impl Filesystem {
             ino
         };
 
-        // Write data
+        // Write data in chunks
         if !data.is_empty() {
-            self.conn
-                .execute(
-                    "INSERT INTO fs_data (ino, offset, size, data) VALUES (?, 0, ?, ?)",
-                    (ino, data.len() as i64, data),
-                )
-                .await?;
+            for (chunk_index, chunk) in data.chunks(self.chunk_size).enumerate() {
+                self.conn
+                    .execute(
+                        "INSERT INTO fs_data (ino, chunk_index, data) VALUES (?, ?, ?)",
+                        (ino, chunk_index as i64, chunk),
+                    )
+                    .await?;
+            }
         }
 
         // Update size and mtime
@@ -575,7 +606,7 @@ impl Filesystem {
         let mut rows = self
             .conn
             .query(
-                "SELECT data FROM fs_data WHERE ino = ? ORDER BY offset",
+                "SELECT data FROM fs_data WHERE ino = ? ORDER BY chunk_index",
                 (ino,),
             )
             .await?;
@@ -831,6 +862,497 @@ impl Filesystem {
             self.conn
                 .execute("DELETE FROM fs_inode WHERE ino = ?", (ino,))
                 .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Get the number of chunks for a given inode (for testing)
+    #[cfg(test)]
+    async fn get_chunk_count(&self, ino: i64) -> Result<i64> {
+        let mut rows = self
+            .conn
+            .query("SELECT COUNT(*) FROM fs_data WHERE ino = ?", (ino,))
+            .await?;
+
+        if let Some(row) = rows.next().await? {
+            Ok(row
+                .get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .unwrap_or(0))
+        } else {
+            Ok(0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    async fn create_test_fs() -> Result<(Filesystem, tempfile::TempDir)> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("test.db");
+        let fs = Filesystem::new(db_path.to_str().unwrap()).await?;
+        Ok((fs, dir))
+    }
+
+    // ==================== Chunk Size Boundary Tests ====================
+
+    #[tokio::test]
+    async fn test_file_smaller_than_chunk_size() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Write a file smaller than chunk_size (100 bytes)
+        let data = vec![0u8; 100];
+        fs.write_file("/small.txt", &data).await?;
+
+        // Read it back
+        let read_data = fs.read_file("/small.txt").await?.unwrap();
+        assert_eq!(read_data.len(), 100);
+        assert_eq!(read_data, data);
+
+        // Verify only 1 chunk was created
+        let ino = fs.resolve_path("/small.txt").await?.unwrap();
+        let chunk_count = fs.get_chunk_count(ino).await?;
+        assert_eq!(chunk_count, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_exactly_chunk_size() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Write exactly chunk_size bytes
+        let chunk_size = fs.chunk_size();
+        let data: Vec<u8> = (0..chunk_size).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/exact.txt", &data).await?;
+
+        // Read it back
+        let read_data = fs.read_file("/exact.txt").await?.unwrap();
+        assert_eq!(read_data.len(), chunk_size);
+        assert_eq!(read_data, data);
+
+        // Verify only 1 chunk was created
+        let ino = fs.resolve_path("/exact.txt").await?.unwrap();
+        let chunk_count = fs.get_chunk_count(ino).await?;
+        assert_eq!(chunk_count, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_one_byte_over_chunk_size() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Write chunk_size + 1 bytes
+        let chunk_size = fs.chunk_size();
+        let data: Vec<u8> = (0..=chunk_size).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/overflow.txt", &data).await?;
+
+        // Read it back
+        let read_data = fs.read_file("/overflow.txt").await?.unwrap();
+        assert_eq!(read_data.len(), chunk_size + 1);
+        assert_eq!(read_data, data);
+
+        // Verify 2 chunks were created
+        let ino = fs.resolve_path("/overflow.txt").await?.unwrap();
+        let chunk_count = fs.get_chunk_count(ino).await?;
+        assert_eq!(chunk_count, 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_spanning_multiple_chunks() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Write ~2.5 chunks worth of data
+        let chunk_size = fs.chunk_size();
+        let data_size = chunk_size * 2 + chunk_size / 2;
+        let data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/multi.txt", &data).await?;
+
+        // Read it back
+        let read_data = fs.read_file("/multi.txt").await?.unwrap();
+        assert_eq!(read_data.len(), data_size);
+        assert_eq!(read_data, data);
+
+        // Verify 3 chunks were created
+        let ino = fs.resolve_path("/multi.txt").await?.unwrap();
+        let chunk_count = fs.get_chunk_count(ino).await?;
+        assert_eq!(chunk_count, 3);
+
+        Ok(())
+    }
+
+    // ==================== Data Integrity Tests ====================
+
+    #[tokio::test]
+    async fn test_roundtrip_byte_for_byte() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Create data that spans chunk boundaries with identifiable patterns
+        let chunk_size = fs.chunk_size();
+        let data_size = chunk_size * 3 + 123; // Odd size spanning 4 chunks
+
+        let data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/roundtrip.bin", &data).await?;
+
+        let read_data = fs.read_file("/roundtrip.bin").await?.unwrap();
+        assert_eq!(read_data.len(), data_size);
+        assert_eq!(read_data, data, "Data mismatch after roundtrip");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_binary_data_with_null_bytes() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        let chunk_size = fs.chunk_size();
+        // Create data with null bytes at chunk boundaries
+        let mut data = vec![0u8; chunk_size * 2 + 100];
+        // Put nulls at the chunk boundary
+        data[chunk_size - 1] = 0;
+        data[chunk_size] = 0;
+        data[chunk_size + 1] = 0;
+        // Put some non-null bytes around
+        data[chunk_size - 2] = 0xFF;
+        data[chunk_size + 2] = 0xFF;
+
+        fs.write_file("/nulls.bin", &data).await?;
+        let read_data = fs.read_file("/nulls.bin").await?.unwrap();
+
+        assert_eq!(read_data, data, "Null bytes at chunk boundary corrupted");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunk_ordering() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        let chunk_size = fs.chunk_size();
+        // Create sequential bytes spanning multiple chunks
+        let data_size = chunk_size * 5;
+        let data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/sequential.bin", &data).await?;
+
+        let read_data = fs.read_file("/sequential.bin").await?.unwrap();
+
+        // Verify every byte is in the correct position
+        for (i, (&expected, &actual)) in data.iter().zip(read_data.iter()).enumerate() {
+            assert_eq!(
+                expected, actual,
+                "Byte mismatch at position {}: expected {}, got {}",
+                i, expected, actual
+            );
+        }
+
+        Ok(())
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    #[tokio::test]
+    async fn test_empty_file() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Write empty file
+        fs.write_file("/empty.txt", &[]).await?;
+
+        // Read it back
+        let read_data = fs.read_file("/empty.txt").await?.unwrap();
+        assert!(read_data.is_empty());
+
+        // Verify 0 chunks were created
+        let ino = fs.resolve_path("/empty.txt").await?.unwrap();
+        let chunk_count = fs.get_chunk_count(ino).await?;
+        assert_eq!(chunk_count, 0);
+
+        // Verify size is 0
+        let stats = fs.stat("/empty.txt").await?.unwrap();
+        assert_eq!(stats.size, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_existing_file() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        let chunk_size = fs.chunk_size();
+
+        // Write initial large file (3 chunks)
+        let initial_data: Vec<u8> = (0..chunk_size * 3).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/overwrite.txt", &initial_data).await?;
+
+        let ino = fs.resolve_path("/overwrite.txt").await?.unwrap();
+        let initial_chunk_count = fs.get_chunk_count(ino).await?;
+        assert_eq!(initial_chunk_count, 3);
+
+        // Overwrite with smaller file (1 chunk)
+        let new_data = vec![42u8; 100];
+        fs.write_file("/overwrite.txt", &new_data).await?;
+
+        // Verify old chunks are gone and new data is correct
+        let read_data = fs.read_file("/overwrite.txt").await?.unwrap();
+        assert_eq!(read_data, new_data);
+
+        let new_chunk_count = fs.get_chunk_count(ino).await?;
+        assert_eq!(new_chunk_count, 1);
+
+        // Verify size is updated
+        let stats = fs.stat("/overwrite.txt").await?.unwrap();
+        assert_eq!(stats.size, 100);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_with_larger_file() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        let chunk_size = fs.chunk_size();
+
+        // Write initial small file (1 chunk)
+        let initial_data = vec![1u8; 100];
+        fs.write_file("/grow.txt", &initial_data).await?;
+
+        let ino = fs.resolve_path("/grow.txt").await?.unwrap();
+        assert_eq!(fs.get_chunk_count(ino).await?, 1);
+
+        // Overwrite with larger file (3 chunks)
+        let new_data: Vec<u8> = (0..chunk_size * 3).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/grow.txt", &new_data).await?;
+
+        // Verify data is correct
+        let read_data = fs.read_file("/grow.txt").await?.unwrap();
+        assert_eq!(read_data, new_data);
+        assert_eq!(fs.get_chunk_count(ino).await?, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_very_large_file() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Write 1MB file
+        let data_size = 1024 * 1024;
+        let data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/large.bin", &data).await?;
+
+        let read_data = fs.read_file("/large.bin").await?.unwrap();
+        assert_eq!(read_data.len(), data_size);
+        assert_eq!(read_data, data);
+
+        // Verify correct number of chunks
+        let chunk_size = fs.chunk_size();
+        let expected_chunks = (data_size + chunk_size - 1) / chunk_size;
+        let ino = fs.resolve_path("/large.bin").await?.unwrap();
+        let actual_chunks = fs.get_chunk_count(ino).await? as usize;
+        assert_eq!(actual_chunks, expected_chunks);
+
+        Ok(())
+    }
+
+    // ==================== Configuration Tests ====================
+
+    #[tokio::test]
+    async fn test_default_chunk_size() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        assert_eq!(fs.chunk_size(), DEFAULT_CHUNK_SIZE);
+        assert_eq!(fs.chunk_size(), 4096);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunk_size_accessor() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        let chunk_size = fs.chunk_size();
+        assert!(chunk_size > 0);
+
+        // Write data and verify chunks match expected based on chunk_size
+        let data = vec![0u8; chunk_size * 2 + 1];
+        fs.write_file("/test.bin", &data).await?;
+
+        let ino = fs.resolve_path("/test.bin").await?.unwrap();
+        let chunk_count = fs.get_chunk_count(ino).await?;
+        assert_eq!(chunk_count, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_config_persistence() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Query fs_config table directly
+        let mut rows = fs
+            .conn
+            .query("SELECT value FROM fs_config WHERE key = 'chunk_size'", ())
+            .await?;
+
+        let row = rows.next().await?.expect("chunk_size config should exist");
+        let value = row
+            .get_value(0)
+            .ok()
+            .and_then(|v| match v {
+                Value::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .expect("chunk_size should be a text value");
+
+        assert_eq!(value, "4096");
+
+        Ok(())
+    }
+
+    // ==================== Schema Tests ====================
+
+    #[tokio::test]
+    async fn test_chunk_index_uniqueness() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        // Write a file to create chunks
+        let chunk_size = fs.chunk_size();
+        let data = vec![0u8; chunk_size * 2];
+        fs.write_file("/unique.txt", &data).await?;
+
+        let ino = fs.resolve_path("/unique.txt").await?.unwrap();
+
+        // Try to insert a duplicate chunk - should fail due to PRIMARY KEY constraint
+        let result = fs
+            .conn
+            .execute(
+                "INSERT INTO fs_data (ino, chunk_index, data) VALUES (?, 0, ?)",
+                (ino, vec![1u8; 10]),
+            )
+            .await;
+
+        assert!(result.is_err(), "Duplicate chunk_index should be rejected");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunk_ordering_in_database() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        let chunk_size = fs.chunk_size();
+        // Create 5 chunks with identifiable data
+        let data_size = chunk_size * 5;
+        let data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
+        fs.write_file("/ordered.bin", &data).await?;
+
+        let ino = fs.resolve_path("/ordered.bin").await?.unwrap();
+
+        // Query chunks in order
+        let mut rows = fs
+            .conn
+            .query(
+                "SELECT chunk_index FROM fs_data WHERE ino = ? ORDER BY chunk_index",
+                (ino,),
+            )
+            .await?;
+
+        let mut indices = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let idx = row
+                .get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .unwrap_or(-1);
+            indices.push(idx);
+        }
+
+        assert_eq!(indices, vec![0, 1, 2, 3, 4]);
+
+        Ok(())
+    }
+
+    // ==================== Cleanup Tests ====================
+
+    #[tokio::test]
+    async fn test_delete_file_removes_all_chunks() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        let chunk_size = fs.chunk_size();
+        // Create multi-chunk file
+        let data = vec![0u8; chunk_size * 4];
+        fs.write_file("/deleteme.txt", &data).await?;
+
+        let ino = fs.resolve_path("/deleteme.txt").await?.unwrap();
+        assert_eq!(fs.get_chunk_count(ino).await?, 4);
+
+        // Delete the file
+        fs.remove("/deleteme.txt").await?;
+
+        // Verify all chunks are gone
+        let mut rows = fs
+            .conn
+            .query("SELECT COUNT(*) FROM fs_data WHERE ino = ?", (ino,))
+            .await?;
+
+        let count = rows
+            .next()
+            .await?
+            .and_then(|r| r.get_value(0).ok().and_then(|v| v.as_integer().copied()))
+            .unwrap_or(-1);
+
+        assert_eq!(count, 0, "All chunks should be deleted");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multiple_files_different_sizes() -> Result<()> {
+        let (fs, _dir) = create_test_fs().await?;
+
+        let chunk_size = fs.chunk_size();
+
+        // Create files of various sizes
+        let files = vec![
+            ("/tiny.txt", 10),
+            ("/small.txt", chunk_size / 2),
+            ("/exact.txt", chunk_size),
+            ("/medium.txt", chunk_size * 2 + 100),
+            ("/large.txt", chunk_size * 5),
+        ];
+
+        for (path, size) in &files {
+            let data: Vec<u8> = (0..*size).map(|i| (i % 256) as u8).collect();
+            fs.write_file(path, &data).await?;
+        }
+
+        // Verify each file has correct data and chunk count
+        for (path, size) in &files {
+            let read_data = fs.read_file(path).await?.unwrap();
+            assert_eq!(read_data.len(), *size, "Size mismatch for {}", path);
+
+            let expected_data: Vec<u8> = (0..*size).map(|i| (i % 256) as u8).collect();
+            assert_eq!(read_data, expected_data, "Data mismatch for {}", path);
+
+            let expected_chunks = if *size == 0 {
+                0
+            } else {
+                (size + chunk_size - 1) / chunk_size
+            };
+            let ino = fs.resolve_path(path).await?.unwrap();
+            let actual_chunks = fs.get_chunk_count(ino).await? as usize;
+            assert_eq!(
+                actual_chunks, expected_chunks,
+                "Chunk count mismatch for {}",
+                path
+            );
         }
 
         Ok(())
