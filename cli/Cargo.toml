@@ -23,7 +23,7 @@ agentfs-sandbox = { path = "../sandbox" }
 reverie = { git = "https://github.com/facebookexperimental/reverie" }
 reverie-ptrace = { git = "https://github.com/facebookexperimental/reverie" }
 reverie-process = { git = "https://github.com/facebookexperimental/reverie" }
-fuser = { version = "0.15", features = ["abi-7-23"] }
+fuser = { version = "0.15", default-features = false, features = ["abi-7-23"] }
 libc = "0.2"
 
 # The profile that 'dist' will build with
