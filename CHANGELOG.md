@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1] - 2025-12-04
+
+### Fixed
+
+- Fix `_Unwind_RaiseException` symbol lookup error on Fedora by linking to `libgcc_s.so` dynamically.
+- Eliminate dependency to libfuse by using the `fuser` crate pure Rust FUSE implementation.
+
 ## [0.2.0] - 2025-12-04
 
 ### Added
