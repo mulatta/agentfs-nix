@@ -342,6 +342,8 @@ async fn init_database(id: Option<String>, force: bool) -> AnyhowResult<()> {
 }
 
 fn main() {
+    reset_sigpipe();
+
     let args = Args::parse();
 
     match args.command {
@@ -408,3 +410,15 @@ fn main() {
         }
     }
 }
+
+/// Reset SIGPIPE to the default behavior (terminate the process) so that
+/// piping output to tools like `head` doesn't cause a panic.
+#[cfg(unix)]
+fn reset_sigpipe() {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
