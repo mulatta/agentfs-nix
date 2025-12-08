@@ -18,7 +18,7 @@ use turso::{Builder, Value};
 
 #[derive(Parser, Debug)]
 #[command(name = "agentfs")]
-#[command(about = "A sandbox for agents that intercepts filesystem operations", long_about = None)]
+#[command(about = "The filesystem for agents", long_about = None)]
 struct Args {
     #[command(subcommand)]
     command: Commands,
@@ -40,6 +40,7 @@ enum Commands {
         #[command(subcommand)]
         command: FsCommands,
     },
+    /// Run a command in the sandboxed environment (experimental).
     Run {
         /// Mount configuration (format: type=bind,src=<host_path>,dst=<sandbox_path>)
         #[arg(long = "mount", value_name = "MOUNT_SPEC")]
