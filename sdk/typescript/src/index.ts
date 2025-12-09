@@ -88,6 +88,10 @@ export class AgentFS {
     // Connect to the database to ensure it's created
     await db.connect();
 
+    return await AgentFS.openWith(db);
+  }
+
+  static async openWith(db: Database): Promise<AgentFS> {
     // Create subsystems
     const kv = new KvStore(db);
     const fs = new Filesystem(db);
