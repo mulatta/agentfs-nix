@@ -50,7 +50,7 @@ export class KvStore {
     await stmt.run(key, serializedValue);
   }
 
-  async get(key: string): Promise<any> {
+  async get<T = any>(key: string): Promise<T | undefined> {
     const stmt = this.db.prepare(`SELECT value FROM kv_store WHERE key = ?`);
     const row = await stmt.get(key) as { value: string } | undefined;
 
@@ -59,7 +59,7 @@ export class KvStore {
     }
 
     // Deserialize the JSON value
-    return JSON.parse(row.value);
+    return JSON.parse(row.value) as T;
   }
 
   async list(prefix: string): Promise<{ key: string, value: any }[]> {
