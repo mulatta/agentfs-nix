@@ -155,7 +155,7 @@ pub async fn cat_filesystem(id_or_path: String, path: &str) -> AnyhowResult<()> 
     }
 
     let query = format!(
-        "SELECT data FROM fs_data WHERE ino = {} ORDER BY offset",
+        "SELECT data FROM fs_data WHERE ino = {} ORDER BY chunk_index",
         current_ino
     );
 
