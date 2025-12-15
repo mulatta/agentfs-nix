@@ -1,5 +1,13 @@
 ---
-allowed-tools: Bash(git add:*), Bash(git status:*), Bash(git commit:*), Bash(mkdir:*), Edit, Write
+allowed-tools:
+  - Bash(git commit:*)
+  - Bash(git add:*)
+  - Bash(git status:*)
+  - Bash(mkdir:*)
+  - Bash(uv:*)
+  - Read
+  - Edit
+  - Write
 argument-hint: [ts-change-sha-commit]
 description: Generate Python SDK for agentfs based on the Typescript SDK
 ---
