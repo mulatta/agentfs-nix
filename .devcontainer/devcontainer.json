@@ -1,5 +1,5 @@
 {
-  "name": "Claude Code Sandbox",
+  "name": "agentfs sandbox",
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
