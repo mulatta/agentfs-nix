@@ -117,7 +117,7 @@ class KvStore:
         escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
         cursor = await self._db.execute(
-            "SELECT key, value FROM kv_store WHERE key LIKE ? ESCAPE '\\\\'", (escaped + "%",)
+            "SELECT key, value FROM kv_store WHERE key LIKE ? ESCAPE '\\'", (escaped + "%",)
         )
         rows = await cursor.fetchall()
 
