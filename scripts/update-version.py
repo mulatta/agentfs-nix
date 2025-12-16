@@ -82,6 +82,37 @@ def update_package_json(file_path: Path, new_version: str) -> bool:
         return False
 
 
+def update_pyproject_toml(file_path: Path, new_version: str) -> bool:
+    """Update version in a pyproject.toml file."""
+    try:
+        content = file_path.read_text()
+
+        # Find and replace the version line under [project]
+        # Match version = "..." with proper spacing
+        pattern = r'(^\[project\].*?^version\s*=\s*)"[^"]*"'
+        replacement = rf'\1"{new_version}"'
+
+        new_content = re.sub(
+            pattern,
+            replacement,
+            content,
+            count=1,
+            flags=re.MULTILINE | re.DOTALL
+        )
+
+        if new_content == content:
+            print(f"Warning: No version field found in {file_path}")
+            return False
+
+        file_path.write_text(new_content)
+        print(f" Updated {file_path.relative_to(file_path.parents[3])}")
+        return True
+
+    except Exception as e:
+        print(f"Error updating {file_path}: {e}", file=sys.stderr)
+        return False
+
+
 def update_cargo_lock(crate_dir: Path) -> bool:
     """Update Cargo.lock by regenerating it in the crate directory."""
     try:
@@ -126,6 +157,27 @@ def update_package_lock(package_dir: Path) -> bool:
         return False
 
 
+def update_uv_lock(package_dir: Path) -> bool:
+    """Update uv.lock by running uv lock."""
+    try:
+        result = subprocess.run(
+            ['uv', 'lock'],
+            cwd=package_dir,
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0:
+            return True
+        else:
+            print(f"Error updating uv.lock: {result.stderr}", file=sys.stderr)
+            return False
+
+    except Exception as e:
+        print(f"Error updating uv.lock: {e}", file=sys.stderr)
+        return False
+
+
 def git_commit_and_tag(root: Path, version: str, components: list) -> bool:
     """Create a git commit and tag for the version update."""
     try:
@@ -134,12 +186,15 @@ def git_commit_and_tag(root: Path, version: str, components: list) -> bool:
         # Stage only the files we modified
         files_to_add = []
         for component in components:
-            # Add version file (Cargo.toml or package.json)
+            # Add version file (Cargo.toml, package.json, or pyproject.toml)
             files_to_add.append(str(component['version_file'].relative_to(root)))
 
-            # Add lock file (Cargo.lock or package-lock.json)
-            if 'Cargo.toml' in str(component['version_file']):
+            # Add lock file (Cargo.lock, package-lock.json, or uv.lock)
+            version_file_str = str(component['version_file'])
+            if 'Cargo.toml' in version_file_str:
                 lock_file = component['lock_dir'] / 'Cargo.lock'
+            elif 'pyproject.toml' in version_file_str:
+                lock_file = component['lock_dir'] / 'uv.lock'
             else:
                 lock_file = component['lock_dir'] / 'package-lock.json'
 
@@ -268,6 +323,14 @@ def main():
             'lock_dir': root / 'sdk' / 'typescript',
             'lock_func': update_package_lock,
             'name': 'sdk/typescript'
+        },
+        # Python SDK
+        {
+            'version_file': root / 'sdk' / 'python' / 'pyproject.toml',
+            'version_func': update_pyproject_toml,
+            'lock_dir': root / 'sdk' / 'python',
+            'lock_func': update_uv_lock,
+            'name': 'sdk/python'
         },
     ]
 
