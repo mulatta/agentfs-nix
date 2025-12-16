@@ -232,18 +232,30 @@ class Filesystem:
         return (parent_ino, name)
 
     async def _create_inode(self, mode: int, uid: int = 0, gid: int = 0) -> int:
-        """Create an inode"""
+        """Create an inode
+
+        Note: We use RETURNING clause which requires explicit cursor close
+        when working with CDC-enabled TursoDB connections.
+        """
         now = int(time.time())
-        cursor = await self._db.execute(
-            """
-            INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
-            VALUES (?, ?, ?, 0, ?, ?, ?)
-            """,
-            (mode, uid, gid, now, now, now),
-        )
+        cursor = self._db.cursor()
+        try:
+            await cursor.execute(
+                """
+                INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
+                VALUES (?, ?, ?, 0, ?, ?, ?)
+                RETURNING ino
+                """,
+                (mode, uid, gid, now, now, now),
+            )
+            row = await cursor.fetchone()
+            assert row is not None
+            ino = row[0]
+        finally:
+            await cursor.close()
+        # Commit after cursor is closed
         await self._db.commit()
-        assert cursor.lastrowid is not None
-        return cursor.lastrowid
+        return ino
 
     async def _create_dentry(self, parent_ino: int, name: str, ino: int) -> None:
         """Create a directory entry"""

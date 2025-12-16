@@ -114,20 +114,30 @@ class ToolCalls:
 
         Example:
             >>> call_id = await tools.start('search', {'query': 'Python'})
+
+        Note: We use RETURNING clause which requires explicit cursor close
+        when working with CDC-enabled TursoDB connections.
         """
         serialized_params = json.dumps(parameters) if parameters is not None else None
         started_at = int(time.time())
 
-        cursor = await self._db.execute(
-            """
-            INSERT INTO tool_calls (name, parameters, status, started_at)
-            VALUES (?, ?, 'pending', ?)
-            """,
-            (name, serialized_params, started_at),
-        )
+        cursor = self._db.cursor()
+        try:
+            await cursor.execute(
+                """
+                INSERT INTO tool_calls (name, parameters, status, started_at)
+                VALUES (?, ?, 'pending', ?)
+                RETURNING id
+                """,
+                (name, serialized_params, started_at),
+            )
+            row = await cursor.fetchone()
+            assert row is not None
+            call_id = row[0]
+        finally:
+            await cursor.close()
         await self._db.commit()
-        assert cursor.lastrowid is not None
-        return cursor.lastrowid
+        return call_id
 
     async def success(self, call_id: int, result: Optional[Any] = None) -> None:
         """Mark a tool call as successful
@@ -228,34 +238,44 @@ class ToolCalls:
             ...     parameters={'query': 'Python'},
             ...     result={'results': [...]}
             ... )
+
+        Note: We use RETURNING clause which requires explicit cursor close
+        when working with CDC-enabled TursoDB connections.
         """
         serialized_params = json.dumps(parameters) if parameters is not None else None
         serialized_result = json.dumps(result) if result is not None else None
         duration_ms = (completed_at - started_at) * 1000
         status = "error" if error else "success"
 
-        cursor = await self._db.execute(
-            """
-            INSERT INTO tool_calls (
-                name, parameters, result, error, status,
-                started_at, completed_at, duration_ms
+        cursor = self._db.cursor()
+        try:
+            await cursor.execute(
+                """
+                INSERT INTO tool_calls (
+                    name, parameters, result, error, status,
+                    started_at, completed_at, duration_ms
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    name,
+                    serialized_params,
+                    serialized_result,
+                    error,
+                    status,
+                    started_at,
+                    completed_at,
+                    duration_ms,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                name,
-                serialized_params,
-                serialized_result,
-                error,
-                status,
-                started_at,
-                completed_at,
-                duration_ms,
-            ),
-        )
+            row = await cursor.fetchone()
+            assert row is not None
+            call_id = row[0]
+        finally:
+            await cursor.close()
         await self._db.commit()
-        assert cursor.lastrowid is not None
-        return cursor.lastrowid
+        return call_id
 
     async def get(self, call_id: int) -> Optional[ToolCall]:
         """Get a specific tool call by ID
