@@ -1354,8 +1354,9 @@ dependencies = [
 
 [[package]]
 name = "turso"
-version = "0.4.0-pre.16"
-source = "git+https://github.com/tursodatabase/turso?tag=v0.4.0-pre.16#574c8258b008ebb2c651cfc4a6c8200c7a76f923"
+version = "0.4.0-pre.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5f5cb407afa59aed4cae26cdf308fd1e274193c00f73dda04a8d1a0a24dac84"
 dependencies = [
  "mimalloc",
  "thiserror 2.0.17",
@@ -1366,8 +1367,9 @@ dependencies = [
 
 [[package]]
 name = "turso_core"
-version = "0.4.0-pre.16"
-source = "git+https://github.com/tursodatabase/turso?tag=v0.4.0-pre.16#574c8258b008ebb2c651cfc4a6c8200c7a76f923"
+version = "0.4.0-pre.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fcc2adc3b8309dcf8b7ccb69d2e8b3172a3ad75083413bbf9a97dab041169a4"
 dependencies = [
  "aegis",
  "aes",
@@ -1418,8 +1420,9 @@ dependencies = [
 
 [[package]]
 name = "turso_ext"
-version = "0.4.0-pre.16"
-source = "git+https://github.com/tursodatabase/turso?tag=v0.4.0-pre.16#574c8258b008ebb2c651cfc4a6c8200c7a76f923"
+version = "0.4.0-pre.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217d3cdf132d7864e486127509436d29cf6cb54d1f6412c6c7ae61f60e58ad3c"
 dependencies = [
  "chrono",
  "getrandom 0.3.4",
@@ -1428,8 +1431,9 @@ dependencies = [
 
 [[package]]
 name = "turso_macros"
-version = "0.4.0-pre.16"
-source = "git+https://github.com/tursodatabase/turso?tag=v0.4.0-pre.16#574c8258b008ebb2c651cfc4a6c8200c7a76f923"
+version = "0.4.0-pre.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7857b9e9f47bb333da4a2f62be2b14dee5f296b4f28793b62c1d0d044828d40"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1438,8 +1442,9 @@ dependencies = [
 
 [[package]]
 name = "turso_parser"
-version = "0.4.0-pre.16"
-source = "git+https://github.com/tursodatabase/turso?tag=v0.4.0-pre.16#574c8258b008ebb2c651cfc4a6c8200c7a76f923"
+version = "0.4.0-pre.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "866e12da3fc5201f9bd1dec74437bde8eb25e782c1c8e1f05289c6504faf67e5"
 dependencies = [
  "bitflags",
  "miette",

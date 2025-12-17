@@ -13,7 +13,7 @@ agentfs-sdk = { path = "../sdk/rust" }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
-turso = { git = "https://github.com/tursodatabase/turso", tag = "v0.4.0-pre.16" }
+turso = "0.4.0-pre.17"
 serde = { version = "1.0", features = ["derive"] }
 parking_lot = "0.12.5"
 clap_complete = { version = "=4.5.61", features = ["unstable-dynamic"] }
@@ -29,7 +29,10 @@ fuser = { version = "0.15", default-features = false, features = ["abi-7-23"] }
 
 # macOS dependencies for FUSE functionality (requires macFUSE)
 [target.'cfg(target_os = "macos")'.dependencies]
-fuser = { version = "0.15", default-features = false, features = ["abi-7-23", "libfuse"] }
+fuser = { version = "0.15", default-features = false, features = [
+    "abi-7-23",
+    "libfuse",
+] }
 
 # Sandbox dependencies - Linux x86_64 only (requires libunwind-ptrace)
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
