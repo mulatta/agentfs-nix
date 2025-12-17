@@ -1,4 +1,4 @@
-import { Database } from '@tursodatabase/database';
+import type { DatabasePromise } from '@tursodatabase/database-common';
 
 export interface ToolCall {
   id: number;
@@ -21,16 +21,16 @@ export interface ToolCallStats {
 }
 
 export class ToolCalls {
-  private db: Database;
+  private db: DatabasePromise;
 
-  private constructor(db: Database) {
+  private constructor(db: DatabasePromise) {
     this.db = db;
   }
 
   /**
    * Create a ToolCalls from an existing database connection
    */
-  static async fromDatabase(db: Database): Promise<ToolCalls> {
+  static async fromDatabase(db: DatabasePromise): Promise<ToolCalls> {
     const tools = new ToolCalls(db);
     await tools.initialize();
     return tools;

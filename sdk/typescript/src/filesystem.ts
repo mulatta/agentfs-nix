@@ -1,4 +1,4 @@
-import { Database } from '@tursodatabase/database';
+import type { DatabasePromise } from '@tursodatabase/database-common';
 
 // File types for mode field
 const S_IFMT = 0o170000;   // File type mask
@@ -28,18 +28,18 @@ export interface Stats {
 }
 
 export class Filesystem {
-  private db: Database;
+  private db: DatabasePromise;
   private rootIno: number = 1;
   private chunkSize: number = DEFAULT_CHUNK_SIZE;
 
-  private constructor(db: Database) {
+  private constructor(db: DatabasePromise) {
     this.db = db;
   }
 
   /**
    * Create a Filesystem from an existing database connection
    */
-  static async fromDatabase(db: Database): Promise<Filesystem> {
+  static async fromDatabase(db: DatabasePromise): Promise<Filesystem> {
     const fs = new Filesystem(db);
     await fs.initialize();
     return fs;

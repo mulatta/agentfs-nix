@@ -1,16 +1,16 @@
-import { Database } from '@tursodatabase/database';
+import type { DatabasePromise } from '@tursodatabase/database-common';
 
 export class KvStore {
-  private db: Database;
+  private db: DatabasePromise;
 
-  private constructor(db: Database) {
+  private constructor(db: DatabasePromise) {
     this.db = db;
   }
 
   /**
    * Create a KvStore from an existing database connection
    */
-  static async fromDatabase(db: Database): Promise<KvStore> {
+  static async fromDatabase(db: DatabasePromise): Promise<KvStore> {
     const kv = new KvStore(db);
     await kv.initialize();
     return kv;
