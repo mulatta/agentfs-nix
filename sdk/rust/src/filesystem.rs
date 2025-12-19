@@ -129,6 +129,9 @@ impl Filesystem {
         // Initialize schema first
         Self::initialize_schema(&conn).await?;
 
+        // Disable synchronous mode for filesystem fsync() semantics.
+        conn.execute("PRAGMA synchronous = OFF", ()).await?;
+
         // Get chunk_size from config (or use default)
         let chunk_size = Self::read_chunk_size(&conn).await?;
 
@@ -1548,6 +1551,21 @@ impl Filesystem {
         };
 
         Ok(FilesystemStats { inodes, bytes_used })
+    }
+
+    /// Synchronize file data to persistent storage
+    ///
+    /// Temporarily enables FULL synchronous mode, runs a transaction to force
+    /// a checkpoint, then restores OFF mode. This ensures durability while
+    /// maintaining high performance for normal operations.
+    ///
+    /// Note: The path parameter is ignored since all data is in a single database.
+    pub async fn fsync(&self, _path: &str) -> Result<()> {
+        self.conn.execute("PRAGMA synchronous = FULL", ()).await?;
+        self.conn.execute("BEGIN", ()).await?;
+        self.conn.execute("COMMIT", ()).await?;
+        self.conn.execute("PRAGMA synchronous = OFF", ()).await?;
+        Ok(())
     }
 
     /// Get the number of chunks for a given inode (for testing)

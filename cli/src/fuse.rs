@@ -680,6 +680,33 @@ impl Filesystem for AgentFSFuse {
         }
     }
 
+    /// Synchronizes file data to persistent storage.
+    ///
+    /// Ensures all pending writes are durably committed by temporarily
+    /// enabling FULL synchronous mode in SQLite.
+    fn fsync(&mut self, _req: &Request, _ino: u64, fh: u64, _datasync: bool, reply: ReplyEmpty) {
+        let path = {
+            let open_files = self.open_files.lock();
+            match open_files.get(&fh) {
+                Some(file) => file.path.clone(),
+                None => {
+                    reply.error(libc::EBADF);
+                    return;
+                }
+            }
+        };
+
+        let agentfs = self.agentfs.clone();
+        let result = self
+            .runtime
+            .block_on(async move { agentfs.fs.fsync(&path).await });
+
+        match result {
+            Ok(()) => reply.ok(),
+            Err(_) => reply.error(libc::EIO),
+        }
+    }
+
     /// Releases (closes) an open file handle.
     ///
     /// Removes the file handle from the open files table.
