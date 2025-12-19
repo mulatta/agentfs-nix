@@ -354,6 +354,50 @@ describe("Filesystem Integration Tests", () => {
     });
   });
 
+  describe("copyFile() Operations", () => {
+    it("should copy a file", async () => {
+      await fs.writeFile("/src.txt", "hello");
+      await fs.copyFile("/src.txt", "/dst.txt");
+      const srcContent = await fs.readFile("/src.txt", "utf8");
+      const dstContent = await fs.readFile("/dst.txt", "utf8");
+      expect(srcContent).toBe("hello");
+      expect(dstContent).toBe("hello");
+    });
+
+    it("should overwrite destination if it exists", async () => {
+      await fs.writeFile("/src.txt", "src");
+      await fs.writeFile("/dst.txt", "dst");
+      await fs.copyFile("/src.txt", "/dst.txt");
+      const dstContent = await fs.readFile("/dst.txt", "utf8");
+      expect(dstContent).toBe("src");
+    });
+
+    it("should throw ENOENT when source does not exist", async () => {
+      await expect(fs.copyFile("/nope.txt", "/out.txt")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("should throw ENOENT when destination parent does not exist", async () => {
+      await fs.writeFile("/src3.txt", "content");
+      await expect(fs.copyFile("/src3.txt", "/missing/child.txt")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("should throw EISDIR when source is a directory", async () => {
+      await fs.mkdir("/asrcdir");
+      await expect(fs.copyFile("/asrcdir", "/out2.txt")).rejects.toMatchObject({ code: "EISDIR" });
+    });
+
+    it("should throw EISDIR when destination is a directory", async () => {
+      await fs.writeFile("/src4.txt", "content");
+      await fs.mkdir("/adstdir");
+      await expect(fs.copyFile("/src4.txt", "/adstdir")).rejects.toMatchObject({ code: "EISDIR" });
+    });
+
+    it("should throw EINVAL when source and destination are the same", async () => {
+      await fs.writeFile("/same.txt", "content");
+      await expect(fs.copyFile("/same.txt", "/same.txt")).rejects.toMatchObject({ code: "EINVAL" });
+    });
+  });
+
   describe("Path Handling", () => {
     it("should handle paths with trailing slashes", async () => {
       await fs.writeFile("/dir/file.txt", "content");

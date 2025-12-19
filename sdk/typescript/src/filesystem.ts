@@ -862,4 +862,118 @@ export class Filesystem {
         throw e;
       }
     }
+
+  /**
+  * Copy a file. Overwrites destination if it exists.
+  */
+  async copyFile(src: string, dest: string): Promise<void> {
+    const srcNormalized = this.normalizePath(src);
+    const destNormalized = this.normalizePath(dest);
+
+    if (srcNormalized === destNormalized) {
+      throw createFsError({
+        code: 'EINVAL',
+        syscall: 'copyfile',
+        path: destNormalized,
+        message: 'invalid argument',
+      });
+    }
+
+    // Resolve and validate source
+    // node uses copyfile as syscall name even though it's not a syscall
+    const { ino: srcIno } = await this.resolvePathOrThrow(srcNormalized, 'copyfile');
+    await assertReadableExistingInode(this.db, srcIno, 'copyfile', srcNormalized);
+
+    const stmt = this.db.prepare(`
+      SELECT mode, uid, gid, size FROM fs_inode WHERE ino = ?
+    `);
+    const srcRow = await stmt.get(srcIno) as
+      | { mode: number; uid: number; gid: number; size: number }
+      | undefined;
+    if (!srcRow) {
+      throw createFsError({
+        code: 'ENOENT',
+        syscall: 'copyfile',
+        path: srcNormalized,
+        message: 'no such file or directory',
+      });
+    }
+
+    // Destination parent must exist and be a directory (Node does not create parents)
+    const destParent = await this.resolveParent(destNormalized);
+    if (!destParent) {
+      throw createFsError({
+        code: 'ENOENT',
+        syscall: 'copyfile',
+        path: destNormalized,
+        message: 'no such file or directory',
+      });
+    }
+    await assertInodeIsDirectory(this.db, destParent.parentIno, 'copyfile', destNormalized);
+
+    await this.db.exec('BEGIN');
+    try {
+      const now = Math.floor(Date.now() / 1000);
+
+      // If destination exists, it must be a file (overwrite semantics).
+      const destIno = await this.resolvePath(destNormalized);
+      if (destIno !== null) {
+        const destMode = await getInodeModeOrThrow(this.db, destIno, 'copyfile', destNormalized);
+        assertNotSymlinkMode(destMode, 'copyfile', destNormalized);
+        if ((destMode & S_IFMT) === S_IFDIR) {
+          throw createFsError({
+            code: 'EISDIR',
+            syscall: 'copyfile',
+            path: destNormalized,
+            message: 'illegal operation on a directory',
+          });
+        }
+
+        // Replace destination contents
+        const deleteStmt = this.db.prepare('DELETE FROM fs_data WHERE ino = ?');
+        await deleteStmt.run(destIno);
+
+        const copyStmt = this.db.prepare(`
+          INSERT INTO fs_data (ino, chunk_index, data)
+          SELECT ?, chunk_index, data
+          FROM fs_data
+          WHERE ino = ?
+          ORDER BY chunk_index ASC
+        `);
+        await copyStmt.run(destIno, srcIno);
+
+        const updateStmt = this.db.prepare(`
+          UPDATE fs_inode
+          SET mode = ?, uid = ?, gid = ?, size = ?, mtime = ?, ctime = ?
+          WHERE ino = ?
+        `);
+        await updateStmt.run(srcRow.mode, srcRow.uid, srcRow.gid, srcRow.size, now, now, destIno);
+      } else {
+        // Create new destination inode + dentry
+        const destInoCreated = await this.createInode(srcRow.mode, srcRow.uid, srcRow.gid);
+        await this.createDentry(destParent.parentIno, destParent.name, destInoCreated);
+
+        const copyStmt = this.db.prepare(`
+          INSERT INTO fs_data (ino, chunk_index, data)
+          SELECT ?, chunk_index, data
+          FROM fs_data
+          WHERE ino = ?
+          ORDER BY chunk_index ASC
+        `);
+        await copyStmt.run(destInoCreated, srcIno);
+
+        const updateStmt = this.db.prepare(`
+          UPDATE fs_inode
+          SET size = ?, mtime = ?, ctime = ?
+          WHERE ino = ?
+        `);
+        await updateStmt.run(srcRow.size, now, now, destInoCreated);
+      }
+
+      await this.db.exec('COMMIT');
+    } catch (e) {
+      await this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
 }
