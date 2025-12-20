@@ -7,7 +7,7 @@ name = "agentfs-sdk"
 version = "0.4.0-pre.2"
 description = "AgentFS Python SDK - A filesystem and key-value store for AI agents"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 keywords = ["ai", "agent", "turso", "sqlite", "key-value", "filesystem"]
 authors = [
@@ -21,6 +21,8 @@ classifiers = [
     'Operating System :: Microsoft :: Windows',
     'Operating System :: MacOS',
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
@@ -48,7 +50,7 @@ include = ["agentfs_sdk*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
