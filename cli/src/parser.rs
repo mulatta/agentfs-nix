@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(name = "agentfs")]
+#[command(version = env!("AGENTFS_VERSION"))]
 #[command(about = "The filesystem for agents", long_about = None)]
 pub struct Args {
     #[command(subcommand)]
