@@ -543,19 +543,29 @@ impl FileSystem for OverlayFS {
     async fn remove(&self, path: &str) -> Result<()> {
         let normalized = self.normalize_path(path);
 
-        // Check if directory has children in delta - if so, can't remove
-        if let Some(children) = self.delta.readdir(&normalized).await? {
-            if !children.is_empty() {
-                return Err(FsError::NotEmpty.into());
-            }
-        }
+        // Check if path is a symlink - symlinks don't have children, so skip directory checks
+        let is_symlink = if let Some(stats) = self.lstat(&normalized).await? {
+            stats.is_symlink()
+        } else {
+            false
+        };
 
-        // Check for visible children in base (not whiteout-ed)
-        if let Some(base_children) = self.base.readdir(&normalized).await? {
-            for child in base_children {
-                let child_path = format!("{}/{}", normalized, child);
-                if !self.is_whiteout(&child_path).await? {
+        // Only check for children if not a symlink (directories need to be empty)
+        if !is_symlink {
+            // Check if directory has children in delta - if so, can't remove
+            if let Some(children) = self.delta.readdir(&normalized).await? {
+                if !children.is_empty() {
                     return Err(FsError::NotEmpty.into());
+                }
+            }
+
+            // Check for visible children in base (not whiteout-ed)
+            if let Some(base_children) = self.base.readdir(&normalized).await? {
+                for child in base_children {
+                    let child_path = format!("{}/{}", normalized, child);
+                    if !self.is_whiteout(&child_path).await? {
+                        return Err(FsError::NotEmpty.into());
+                    }
                 }
             }
         }
@@ -563,11 +573,11 @@ impl FileSystem for OverlayFS {
         // Try to remove from delta
         let removed_from_delta = self.delta.remove(&normalized).await.is_ok();
 
-        // Check if it exists in base (and not already whiteout)
+        // Check if it exists in base (and not already whiteout) - use lstat to not follow symlinks
         let exists_in_base = if self.is_whiteout(&normalized).await? {
             false
         } else {
-            self.base.stat(&normalized).await?.is_some()
+            self.base.lstat(&normalized).await?.is_some()
         };
 
         // If exists in base, create whiteout

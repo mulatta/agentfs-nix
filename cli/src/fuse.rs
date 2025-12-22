@@ -82,7 +82,7 @@ impl Filesystem for AgentFSFuse {
         };
         let fs = self.fs.clone();
         let (result, path) = self.runtime.block_on(async move {
-            let result = fs.stat(&path).await;
+            let result = fs.lstat(&path).await;
             (result, path)
         });
         match result {
@@ -107,10 +107,32 @@ impl Filesystem for AgentFSFuse {
         };
 
         let fs = self.fs.clone();
-        let result = self.runtime.block_on(async move { fs.stat(&path).await });
+        let result = self.runtime.block_on(async move { fs.lstat(&path).await });
 
         match result {
             Ok(Some(stats)) => reply.attr(&TTL, &fillattr(&stats, self.uid, self.gid)),
+            Ok(None) => reply.error(libc::ENOENT),
+            Err(_) => reply.error(libc::EIO),
+        }
+    }
+
+    /// Reads the target of a symbolic link.
+    ///
+    /// Returns the path that the symlink points to. This is called by operations
+    /// like `ls -l` to display symlink targets.
+    fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
+        let Some(path) = self.get_path(ino) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+
+        let fs = self.fs.clone();
+        let result = self
+            .runtime
+            .block_on(async move { fs.readlink(&path).await });
+
+        match result {
+            Ok(Some(target)) => reply.data(target.as_bytes()),
             Ok(None) => reply.error(libc::ENOENT),
             Err(_) => reply.error(libc::EIO),
         }
@@ -489,7 +511,7 @@ impl Filesystem for AgentFSFuse {
         // Verify target is a directory
         let fs = self.fs.clone();
         let (stat_result, path) = self.runtime.block_on(async move {
-            let result = fs.stat(&path).await;
+            let result = fs.lstat(&path).await;
             (result, path)
         });
 
@@ -620,20 +642,35 @@ impl Filesystem for AgentFSFuse {
         // Get inode before removing so we can uncache
         let fs = self.fs.clone();
         let (stat_result, path) = self.runtime.block_on(async move {
-            let result = fs.stat(&path).await;
+            let result = fs.lstat(&path).await;
             (result, path)
         });
 
-        let ino = stat_result.ok().flatten().map(|s| s.ino as u64);
+        let stats = match &stat_result {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+            Err(_) => {
+                reply.error(libc::EIO);
+                return;
+            }
+        };
+
+        if stats.is_directory() {
+            reply.error(libc::EISDIR);
+            return;
+        }
+
+        let ino = stats.ino as u64;
 
         let fs = self.fs.clone();
         let result = self.runtime.block_on(async move { fs.remove(&path).await });
 
         match result {
             Ok(()) => {
-                if let Some(ino) = ino {
-                    self.drop_path(ino);
-                }
+                self.drop_path(ino);
                 reply.ok();
             }
             Err(_) => reply.error(libc::EIO),
