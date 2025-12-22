@@ -17,7 +17,9 @@ use std::{
 };
 use tokio::runtime::Runtime;
 
-const TTL: Duration = Duration::from_secs(1);
+/// Cache entries never expire - we explicitly invalidate on mutations.
+/// This is safe because we are the only writer to the filesystem.
+const TTL: Duration = Duration::MAX;
 
 /// Options for mounting an agent filesystem via FUSE.
 #[derive(Debug, Clone)]
