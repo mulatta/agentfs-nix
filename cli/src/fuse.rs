@@ -1,6 +1,6 @@
 use agentfs_sdk::{BoxedFile, FileSystem, FsError, Stats};
 use fuser::{
-    consts::{FUSE_PARALLEL_DIROPS, FUSE_WRITEBACK_CACHE},
+    consts::{FUSE_ASYNC_READ, FUSE_PARALLEL_DIROPS, FUSE_WRITEBACK_CACHE},
     FileAttr, FileType, Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyCreate, ReplyData,
     ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite,
     Request,
@@ -62,12 +62,15 @@ struct AgentFSFuse {
 impl Filesystem for AgentFSFuse {
     /// Initialize the filesystem and enable performance optimizations.
     ///
+    /// - Async read: allows the kernel to issue multiple read requests in parallel,
+    ///   improving throughput for concurrent file access.
     /// - Writeback caching: allows the kernel to buffer writes and flush them
     ///   later, significantly improving write performance for small writes.
     /// - Parallel dirops: allows concurrent lookup() and readdir() on the same
     ///   directory, improving performance for parallel file access patterns.
     fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> Result<(), libc::c_int> {
-        let _ = config.add_capabilities(FUSE_WRITEBACK_CACHE | FUSE_PARALLEL_DIROPS);
+        let _ =
+            config.add_capabilities(FUSE_ASYNC_READ | FUSE_WRITEBACK_CACHE | FUSE_PARALLEL_DIROPS);
         Ok(())
     }
 
