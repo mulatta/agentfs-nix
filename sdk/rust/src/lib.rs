@@ -38,6 +38,39 @@ pub struct AgentFSOptions {
 }
 
 impl AgentFSOptions {
+    /// Validates an agent ID to prevent path traversal and ensure safe filesystem operations.
+    /// Returns true if the ID contains only alphanumeric characters, hyphens, and underscores.
+    pub fn validate_agent_id(id: &str) -> bool {
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    }
+    pub fn db_path(&self) -> anyhow::Result<String> {
+        // Determine database path: path takes precedence over id
+        if let Some(path) = &self.path {
+            // Custom path provided directly
+            Ok(path.to_string())
+        } else if let Some(id) = &self.id {
+            // Validate agent ID to prevent path traversal attacks
+            if !Self::validate_agent_id(&id) {
+                anyhow::bail!(
+                    "Invalid agent ID '{}'. Agent IDs must contain only alphanumeric characters, hyphens, and underscores.",
+                    id
+                );
+            }
+
+            // Ensure .agentfs directory exists
+            let agentfs_dir = agentfs_dir();
+            if !agentfs_dir.exists() {
+                std::fs::create_dir_all(agentfs_dir)?;
+            }
+            Ok(format!("{}/{}.db", agentfs_dir.display(), id))
+        } else {
+            // No id or path = ephemeral in-memory database
+            Ok(":memory:".to_string())
+        }
+    }
     /// Create options for a persistent agent with the given ID
     pub fn with_id(id: impl Into<String>) -> Self {
         Self {
@@ -78,7 +111,7 @@ impl AgentFSOptions {
         }
 
         // First, check if it's a valid agent ID with an existing database in .agentfs/
-        if AgentFS::validate_agent_id(&id_or_path) {
+        if AgentFSOptions::validate_agent_id(&id_or_path) {
             let db_path = agentfs_dir().join(format!("{}.db", id_or_path));
             if db_path.exists() {
                 return Ok(Self::with_path(db_path.to_str().ok_or_else(|| {
@@ -93,7 +126,7 @@ impl AgentFSOptions {
             Ok(Self::with_path(id_or_path))
         } else {
             // Not a valid agent and not an existing file
-            if AgentFS::validate_agent_id(&id_or_path) {
+            if AgentFSOptions::validate_agent_id(&id_or_path) {
                 anyhow::bail!(
                     "Agent '{}' not found at '{}'",
                     id_or_path,
@@ -140,32 +173,13 @@ impl AgentFS {
     /// # }
     /// ```
     pub async fn open(options: AgentFSOptions) -> Result<Self> {
-        // Determine database path: path takes precedence over id
-        let db_path = if let Some(path) = options.path {
-            // Custom path provided directly
-            path
-        } else if let Some(id) = options.id {
-            // Validate agent ID to prevent path traversal attacks
-            if !Self::validate_agent_id(&id) {
-                anyhow::bail!(
-                    "Invalid agent ID '{}'. Agent IDs must contain only alphanumeric characters, hyphens, and underscores.",
-                    id
-                );
-            }
-
-            // Ensure .agentfs directory exists
-            let agentfs_dir = agentfs_dir();
-            if !agentfs_dir.exists() {
-                std::fs::create_dir_all(agentfs_dir)?;
-            }
-            format!("{}/{}.db", agentfs_dir.display(), id)
-        } else {
-            // No id or path = ephemeral in-memory database
-            ":memory:".to_string()
-        };
-
+        let db_path = options.db_path()?;
         let db = Builder::new_local(&db_path).build().await?;
         let conn = db.connect()?;
+        Self::open_with(conn).await
+    }
+
+    pub async fn open_with(conn: Connection) -> Result<Self> {
         let conn = Arc::new(conn);
 
         let kv = KvStore::from_connection(conn.clone()).await?;
@@ -398,15 +412,6 @@ impl AgentFS {
             }
             Err(_) => Ok(None), // Table doesn't exist
         }
-    }
-
-    /// Validates an agent ID to prevent path traversal and ensure safe filesystem operations.
-    /// Returns true if the ID contains only alphanumeric characters, hyphens, and underscores.
-    pub fn validate_agent_id(id: &str) -> bool {
-        !id.is_empty()
-            && id
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     }
 }
 
