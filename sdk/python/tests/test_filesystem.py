@@ -107,7 +107,7 @@ class TestFilesystemReadOperations:
             await db.execute("PRAGMA unstable_capture_data_changes_conn('full')")
             fs = await Filesystem.from_database(db)
 
-            with pytest.raises(FileNotFoundError):
+            with pytest.raises(ErrnoException):
                 await fs.read_file("/non-existent.txt")
             await db.close()
 
@@ -237,7 +237,7 @@ class TestFilesystemDeleteOperations:
 
             await fs.write_file("/delete-me.txt", "content")
             await fs.delete_file("/delete-me.txt")
-            with pytest.raises(FileNotFoundError):
+            with pytest.raises(ErrnoException):
                 await fs.read_file("/delete-me.txt")
             await db.close()
 
@@ -249,7 +249,7 @@ class TestFilesystemDeleteOperations:
             await db.execute("PRAGMA unstable_capture_data_changes_conn('full')")
             fs = await Filesystem.from_database(db)
 
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.delete_file("/non-existent.txt")
             await db.close()
 
@@ -721,7 +721,7 @@ class TestFilesystemStats:
             await db.execute("PRAGMA unstable_capture_data_changes_conn('full')")
             fs = await Filesystem.from_database(db)
 
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.stat("/nonexistent")
             await db.close()
 
@@ -783,7 +783,7 @@ class TestFilesystemRm:
 
             await fs.write_file("/rmfile.txt", "content")
             await fs.rm("/rmfile.txt")
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.read_file("/rmfile.txt")
             await db.close()
 
@@ -834,7 +834,7 @@ class TestFilesystemRm:
 
             await fs.write_file("/tree/a/b/c.txt", "content")
             await fs.rm("/tree", recursive=True)
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.readdir("/tree")
             root = await fs.readdir("/")
             assert "tree" not in root
@@ -855,7 +855,7 @@ class TestFilesystemRmdir:
 
             await fs.mkdir("/emptydir")
             await fs.rmdir("/emptydir")
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.readdir("/emptydir")
             root = await fs.readdir("/")
             assert "emptydir" not in root
@@ -914,7 +914,7 @@ class TestFilesystemRename:
 
             await fs.write_file("/a.txt", "hello")
             await fs.rename("/a.txt", "/b.txt")
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.read_file("/a.txt")
             content = await fs.read_file("/b.txt", "utf-8")
             assert content == "hello"
@@ -930,7 +930,7 @@ class TestFilesystemRename:
 
             await fs.write_file("/olddir/sub/file.txt", "content")
             await fs.rename("/olddir", "/newdir")
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.readdir("/olddir")
             content = await fs.read_file("/newdir/sub/file.txt", "utf-8")
             assert content == "content"
@@ -947,7 +947,7 @@ class TestFilesystemRename:
             await fs.write_file("/src.txt", "src")
             await fs.write_file("/dst.txt", "dst")
             await fs.rename("/src.txt", "/dst.txt")
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.read_file("/src.txt")
             content = await fs.read_file("/dst.txt", "utf-8")
             assert content == "src"
@@ -995,7 +995,7 @@ class TestFilesystemRename:
             root = await fs.readdir("/")
             assert "todir" in root
             assert "fromdir" not in root
-            with pytest.raises(FileNotFoundError, match="ENOENT"):
+            with pytest.raises(ErrnoException, match="ENOENT"):
                 await fs.readdir("/fromdir")
             await db.close()
 

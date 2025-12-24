@@ -15,7 +15,7 @@ from .constants import (
     S_IFMT,
     S_IFREG,
 )
-from .errors import create_fs_error, FsSyscall, ErrnoException
+from .errors import ErrnoException, FsSyscall
 from .guards import (
     assert_inode_is_directory,
     assert_not_root,
@@ -338,7 +338,7 @@ class Filesystem:
         normalized_path = self._normalize_path(path)
         ino = await self._resolve_path(normalized_path)
         if ino is None:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOENT",
                 syscall=syscall,
                 path=normalized_path,
@@ -378,7 +378,7 @@ class Filesystem:
             # Create new file
             parent = await self._resolve_parent(normalized_path)
             if not parent:
-                raise create_fs_error(
+                raise ErrnoException(
                     code="ENOENT",
                     syscall="open",
                     path=normalized_path,
@@ -594,7 +594,7 @@ class Filesystem:
         row = await cursor.fetchone()
 
         if not row:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOENT",
                 syscall="stat",
                 path=normalized_path,
@@ -626,7 +626,7 @@ class Filesystem:
 
         existing = await self._resolve_path(normalized_path)
         if existing is not None:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="EEXIST",
                 syscall="mkdir",
                 path=normalized_path,
@@ -635,7 +635,7 @@ class Filesystem:
 
         parent = await self._resolve_parent(normalized_path)
         if not parent:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOENT",
                 syscall="mkdir",
                 path=normalized_path,
@@ -649,7 +649,7 @@ class Filesystem:
         try:
             await self._create_dentry(parent_ino, name, dir_ino)
         except Exception:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="EEXIST",
                 syscall="mkdir",
                 path=normalized_path,
@@ -673,7 +673,7 @@ class Filesystem:
         mode = await get_inode_mode_or_throw(self._db, ino, "rmdir", normalized_path)
         assert_not_symlink_mode(mode, "rmdir", normalized_path)
         if (mode & S_IFMT) != S_IFDIR:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOTDIR",
                 syscall="rmdir",
                 path=normalized_path,
@@ -690,7 +690,7 @@ class Filesystem:
         )
         child = await cursor.fetchone()
         if child:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOTEMPTY",
                 syscall="rmdir",
                 path=normalized_path,
@@ -699,7 +699,7 @@ class Filesystem:
 
         parent = await self._resolve_parent(normalized_path)
         if not parent:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="EPERM",
                 syscall="rmdir",
                 path=normalized_path,
@@ -742,7 +742,7 @@ class Filesystem:
 
         parent = await self._resolve_parent(normalized_path)
         if not parent:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="EPERM",
                 syscall="rm",
                 path=normalized_path,
@@ -753,7 +753,7 @@ class Filesystem:
 
         if (mode & S_IFMT) == S_IFDIR:
             if not recursive:
-                raise create_fs_error(
+                raise ErrnoException(
                     code="EISDIR",
                     syscall="rm",
                     path=normalized_path,
@@ -840,7 +840,7 @@ class Filesystem:
 
         old_parent = await self._resolve_parent(old_normalized)
         if not old_parent:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="EPERM",
                 syscall="rename",
                 path=old_normalized,
@@ -849,7 +849,7 @@ class Filesystem:
 
         new_parent = await self._resolve_parent(new_normalized)
         if not new_parent:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOENT",
                 syscall="rename",
                 path=new_normalized,
@@ -873,7 +873,7 @@ class Filesystem:
 
             # Prevent renaming a directory into its own subtree (would create cycles)
             if old_is_dir and new_normalized.startswith(old_normalized + "/"):
-                raise create_fs_error(
+                raise ErrnoException(
                     code="EINVAL",
                     syscall="rename",
                     path=new_normalized,
@@ -889,14 +889,14 @@ class Filesystem:
                 new_is_dir = (new_mode & S_IFMT) == S_IFDIR
 
                 if new_is_dir and not old_is_dir:
-                    raise create_fs_error(
+                    raise ErrnoException(
                         code="EISDIR",
                         syscall="rename",
                         path=new_normalized,
                         message="illegal operation on a directory",
                     )
                 if not new_is_dir and old_is_dir:
-                    raise create_fs_error(
+                    raise ErrnoException(
                         code="ENOTDIR",
                         syscall="rename",
                         path=new_normalized,
@@ -915,7 +915,7 @@ class Filesystem:
                     )
                     child = await cursor.fetchone()
                     if child:
-                        raise create_fs_error(
+                        raise ErrnoException(
                             code="ENOTEMPTY",
                             syscall="rename",
                             path=new_normalized,
@@ -984,7 +984,7 @@ class Filesystem:
         dest_normalized = self._normalize_path(dest)
 
         if src_normalized == dest_normalized:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="EINVAL",
                 syscall="copyfile",
                 path=dest_normalized,
@@ -1005,7 +1005,7 @@ class Filesystem:
         )
         src_row = await cursor.fetchone()
         if not src_row:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOENT",
                 syscall="copyfile",
                 path=src_normalized,
@@ -1017,7 +1017,7 @@ class Filesystem:
         # Destination parent must exist and be a directory
         dest_parent = await self._resolve_parent(dest_normalized)
         if not dest_parent:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOENT",
                 syscall="copyfile",
                 path=dest_normalized,
@@ -1040,7 +1040,7 @@ class Filesystem:
                 )
                 assert_not_symlink_mode(dest_mode, "copyfile", dest_normalized)
                 if (dest_mode & S_IFMT) == S_IFDIR:
-                    raise create_fs_error(
+                    raise ErrnoException(
                         code="EISDIR",
                         syscall="copyfile",
                         path=dest_normalized,
@@ -1128,7 +1128,7 @@ class Filesystem:
         normalized_path = self._normalize_path(path)
         ino = await self._resolve_path(normalized_path)
         if ino is None:
-            raise create_fs_error(
+            raise ErrnoException(
                 code="ENOENT",
                 syscall="access",
                 path=normalized_path,

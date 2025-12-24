@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any
 from turso.aio import Connection
 
 from .constants import S_IFDIR, S_IFLNK, S_IFMT
-from .errors import create_fs_error, FsSyscall
+from .errors import ErrnoException, FsSyscall
 
 
 async def _get_inode_mode(db: Connection, ino: int) -> Optional[int]:
@@ -28,7 +28,7 @@ async def get_inode_mode_or_throw(
     """Get inode mode or throw ENOENT if not found"""
     mode = await _get_inode_mode(db, ino)
     if mode is None:
-        raise create_fs_error(
+        raise ErrnoException(
             code="ENOENT",
             syscall=syscall,
             path=path,
@@ -40,7 +40,7 @@ async def get_inode_mode_or_throw(
 def assert_not_root(path: str, syscall: FsSyscall) -> None:
     """Assert that path is not root directory"""
     if path == "/":
-        raise create_fs_error(
+        raise ErrnoException(
             code="EPERM",
             syscall=syscall,
             path=path,
@@ -60,7 +60,7 @@ def throw_enoent_unless_force(path: str, syscall: FsSyscall, force: bool) -> Non
     """Throw ENOENT unless force flag is set"""
     if force:
         return
-    raise create_fs_error(
+    raise ErrnoException(
         code="ENOENT",
         syscall=syscall,
         path=path,
@@ -71,7 +71,7 @@ def throw_enoent_unless_force(path: str, syscall: FsSyscall, force: bool) -> Non
 def assert_not_symlink_mode(mode: int, syscall: FsSyscall, path: str) -> None:
     """Assert that mode does not represent a symlink"""
     if (mode & S_IFMT) == S_IFLNK:
-        raise create_fs_error(
+        raise ErrnoException(
             code="ENOSYS",
             syscall=syscall,
             path=path,
@@ -88,14 +88,14 @@ async def _assert_existing_non_dir_non_symlink_inode(
     """Assert inode exists and is neither directory nor symlink"""
     mode = await _get_inode_mode(db, ino)
     if mode is None:
-        raise create_fs_error(
+        raise ErrnoException(
             code="ENOENT",
             syscall=syscall,
             path=full_path_for_error,
             message="no such file or directory",
         )
     if _is_dir_mode(mode):
-        raise create_fs_error(
+        raise ErrnoException(
             code="EISDIR",
             syscall=syscall,
             path=full_path_for_error,
@@ -113,14 +113,14 @@ async def assert_inode_is_directory(
     """Assert that inode is a directory"""
     mode = await _get_inode_mode(db, ino)
     if mode is None:
-        raise create_fs_error(
+        raise ErrnoException(
             code="ENOENT",
             syscall=syscall,
             path=full_path_for_error,
             message="no such file or directory",
         )
     if not _is_dir_mode(mode):
-        raise create_fs_error(
+        raise ErrnoException(
             code="ENOTDIR",
             syscall=syscall,
             path=full_path_for_error,
@@ -157,7 +157,7 @@ async def assert_readdir_target_inode(
     syscall: FsSyscall = "scandir"
     mode = await _get_inode_mode(db, ino)
     if mode is None:
-        raise create_fs_error(
+        raise ErrnoException(
             code="ENOENT",
             syscall=syscall,
             path=full_path_for_error,
@@ -165,7 +165,7 @@ async def assert_readdir_target_inode(
         )
     assert_not_symlink_mode(mode, syscall, full_path_for_error)
     if not _is_dir_mode(mode):
-        raise create_fs_error(
+        raise ErrnoException(
             code="ENOTDIR",
             syscall=syscall,
             path=full_path_for_error,
@@ -182,14 +182,14 @@ async def assert_unlink_target_inode(
     syscall: FsSyscall = "unlink"
     mode = await _get_inode_mode(db, ino)
     if mode is None:
-        raise create_fs_error(
+        raise ErrnoException(
             code="ENOENT",
             syscall=syscall,
             path=full_path_for_error,
             message="no such file or directory",
         )
     if _is_dir_mode(mode):
-        raise create_fs_error(
+        raise ErrnoException(
             code="EISDIR",
             syscall=syscall,
             path=full_path_for_error,

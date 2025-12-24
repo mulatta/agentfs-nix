@@ -31,28 +31,7 @@ FsSyscall = Literal[
 
 
 class ErrnoException(Exception):
-    """Exception with errno-style attributes"""
-
-    def __init__(
-        self,
-        message: str,
-        code: Optional[FsErrorCode] = None,
-        syscall: Optional[FsSyscall] = None,
-        path: Optional[str] = None,
-    ):
-        super().__init__(message)
-        self.code = code
-        self.syscall = syscall
-        self.path = path
-
-
-def create_fs_error(
-    code: FsErrorCode,
-    syscall: FsSyscall,
-    path: Optional[str] = None,
-    message: Optional[str] = None,
-) -> ErrnoException:
-    """Create a filesystem error with consistent formatting
+    """Exception with errno-style attributes
 
     Args:
         code: POSIX error code (e.g., 'ENOENT')
@@ -60,18 +39,22 @@ def create_fs_error(
         path: Optional path involved in the error
         message: Optional custom message (defaults to code)
 
-    Returns:
-        ErrnoException with formatted message and attributes
+    Example:
+        >>> raise ErrnoException('ENOENT', 'open', '/missing.txt')
+        ErrnoException: ENOENT: no such file or directory, open '/missing.txt'
     """
-    base = message if message else code
-    suffix = f" '{path}'" if path is not None else ""
-    error_message = f"{code}: {base}, {syscall}{suffix}"
 
-    # For ENOENT, also inherit from FileNotFoundError for backward compatibility
-    if code == "ENOENT":
-        # Create a custom exception class that inherits from both
-        class FileNotFoundErrnoException(ErrnoException, FileNotFoundError):
-            pass
-        return FileNotFoundErrnoException(error_message, code=code, syscall=syscall, path=path)
-
-    return ErrnoException(error_message, code=code, syscall=syscall, path=path)
+    def __init__(
+        self,
+        code: FsErrorCode,
+        syscall: FsSyscall,
+        path: Optional[str] = None,
+        message: Optional[str] = None,
+    ):
+        base = message if message else code
+        suffix = f" '{path}'" if path is not None else ""
+        error_message = f"{code}: {base}, {syscall}{suffix}"
+        super().__init__(error_message)
+        self.code = code
+        self.syscall = syscall
+        self.path = path
