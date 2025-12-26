@@ -51,9 +51,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # forcing the `pure-rust` feature, which skips the C/NEON backend that fails
 # with Apple clang (`veor3q_u8` in `aegis128l_neon_sha3.c`).
 aegis = { version = "0.9.6", features = ["pure-rust"] }
-
-# Sandbox dependencies - Linux x86_64 only (requires libunwind-ptrace)
-[target.'cfg(all(target_os = "linux"))'.dependencies]
+# Sandbox dependencies - (requires libunwind-dev on ARM)
 agentfs-sandbox = { path = "../sandbox" }
 reverie = { git = "https://github.com/facebookexperimental/reverie" }
 reverie-ptrace = { git = "https://github.com/facebookexperimental/reverie" }
