@@ -451,6 +451,7 @@ fn child_exit(msg: &str) -> ! {
 }
 
 /// Child process: set up namespace isolation and execute the command.
+#[allow(clippy::too_many_arguments)]
 fn run_child(
     cwd: &Path,
     fuse_mountpoint: &Path,
