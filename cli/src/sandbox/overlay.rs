@@ -37,7 +37,7 @@ const FUSE_MOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 
 /// Virtual filesystems that must remain writable for system operation.
 /// These are skipped when remounting the filesystem hierarchy as read-only.
-const SKIP_MOUNT_PREFIXES: &[&str] = &["/proc", "/sys", "/dev"];
+const SKIP_MOUNT_PREFIXES: &[&str] = &["/proc", "/sys", "/dev", "/tmp"];
 
 /// Default directories that are allowed to be writable.
 /// These are common application config/cache directories that many programs need.
