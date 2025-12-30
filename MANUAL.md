@@ -197,8 +197,6 @@ To unmount, use `fusermount -u ./my-agent-mount` on Linux or `umount ./my-agent-
 
 Execute a program in a sandboxed environment with copy-on-write filesystem isolation.
 
-By default, uses FUSE+overlay with user namespaces for isolation. The current working directory becomes copy-on-write (changes are stored in an AgentFS database), while the rest of the filesystem is read-only.
-
 **Usage:**
 ```bash
 agentfs run [OPTIONS] <COMMAND> [ARGS]...
@@ -212,12 +210,27 @@ agentfs run [OPTIONS] <COMMAND> [ARGS]...
 - `--session <ID>` - Session identifier for sharing the delta layer across multiple runs. If not provided, a unique session ID is generated for each run. Use the same session ID to share modifications between runs or to join an existing session from another terminal.
 - `--allow <PATH>` - Additional paths to allow read-write access (can be specified multiple times)
 - `--no-default-allows` - Disable default allowed directories (~/.config, ~/.cache, ~/.local, ~/.claude, etc.)
-- `--experimental-sandbox` - Use experimental ptrace-based syscall interception sandbox
+- `--experimental-sandbox` - Use experimental ptrace-based syscall interception sandbox (Linux only)
 - `--strace` - Enable strace-like output for system calls (only with `--experimental-sandbox`)
 - `-h, --help` - Print help
 
 **Environment Variables:**
-- `AGENTFS_SESSION` - Set automatically inside the sandbox to the current session ID. This allows scripts and programs to identify which session they are running in.
+- `AGENTFS` - Set to `1` inside the sandbox to indicate an AgentFS environment
+- `AGENTFS_SANDBOX` - Set to the sandbox type (`macos-sandbox` or `overlay`)
+
+#### Platform-Specific Sandboxing
+
+**Linux:**
+Uses FUSE + overlay filesystem with user namespaces for isolation. The current working directory becomes copy-on-write (changes are stored in an AgentFS database), while the rest of the filesystem is read-only.
+
+**macOS:**
+Uses NFS + overlay filesystem with Apple's Sandbox (`sandbox-exec`) for kernel-enforced isolation. The current working directory becomes copy-on-write, and file writes are restricted to:
+- Current working directory (via the copy-on-write overlay)
+- `/tmp`
+- Default allowed directories in HOME: `~/.claude`, `~/.config`, `~/.cache`, `~/.local`, `~/.npm`
+- Any paths specified with `--allow`
+
+All other locations are read-only. Use `--no-default-allows` to disable the default allowed directories.
 
 **Examples:**
 
