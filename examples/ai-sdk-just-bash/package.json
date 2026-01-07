@@ -9,9 +9,14 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.0",
-    "ai": "^6.0.0",
     "agentfs-sdk": "file:../../sdk/typescript",
+    "ai": "^6.0.0",
+    "bash-tool": "^1.0.0",
     "glob": "^11.0.0",
-    "just-bash": "^1.0.1"
+    "just-bash": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
   }
 }

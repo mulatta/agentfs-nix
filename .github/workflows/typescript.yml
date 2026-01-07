@@ -121,3 +121,15 @@ jobs:
       run: |
         npm ci
         npm run build
+
+    - name: Test AI SDK Example
+      working-directory: examples/ai-sdk-just-bash
+      run: |
+        npm ci
+        npm run typecheck
+
+    - name: Test Cloudflare Example
+      working-directory: examples/cloudflare
+      run: |
+        npm ci
+        npm run typecheck

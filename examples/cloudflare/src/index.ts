@@ -16,11 +16,11 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { streamText } from "ai";
+import { streamText, stepCountIs } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
-import { createBashTool } from "just-bash/ai";
+import { createBashTool } from "bash-tool";
+import { Bash } from "just-bash";
 import { AgentFS, type CloudflareStorage } from "agentfs-sdk/cloudflare";
-import { agentfs } from "agentfs-sdk/just-bash";
 
 export interface Env {
   AGENT_FS: DurableObjectNamespace<AgentFSDurableObject>;
@@ -39,12 +39,12 @@ export class AgentFSDurableObject extends DurableObject<Env> {
   }
 
   async chat(message: string): Promise<ReadableStream<Uint8Array>> {
-    // Wrap the AgentFS for just-bash compatibility
-    const bashFs = await agentfs({ fs: this.fs });
+    // Create a just-bash Bash instance with AgentFS filesystem
+    const bash = new Bash({ fs: this.fs });
 
-    // Create the bash tool with the persistent filesystem
-    const bashTool = createBashTool({
-      fs: bashFs,
+    // Create the bash tool with the just-bash sandbox
+    const bashToolkit = await createBashTool({
+      sandbox: bash,
       extraInstructions: `You are an AI agent with a persistent filesystem.
 Files you create will persist across sessions.
 
@@ -61,13 +61,13 @@ Use bash commands to interact with the filesystem:
 
     // Stream the response
     const result = streamText({
-      model: workersai("@cf/meta/llama-3.1-70b-instruct"),
-      tools: { bash: bashTool },
+      model: workersai("@cf/meta/llama-3.1-70b-instruct" as Parameters<typeof workersai>[0]),
+      tools: bashToolkit.tools,
       messages: [{ role: "user", content: message }],
-      maxSteps: 10,
+      stopWhen: stepCountIs(10),
     });
 
-    return result.toDataStream();
+    return result.toTextStreamResponse().body!;
   }
 }
 

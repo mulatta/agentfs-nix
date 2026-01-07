@@ -31,7 +31,7 @@ export function runShell(agent: AgentRunner): void {
   );
 
   const prompt = (): void => {
-    rl.question(`${colors.green}You:${colors.reset} `, async (input) => {
+    rl.question(`${colors.green}You:${colors.reset} `, async (input: string) => {
       const trimmed = input.trim();
 
       if (!trimmed) {

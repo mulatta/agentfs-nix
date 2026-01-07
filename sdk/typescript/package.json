@@ -51,12 +51,12 @@
     "@vitest/browser": "^4.0.16",
     "@vitest/browser-playwright": "^4.0.16",
     "@vitest/ui": "^4.0.1",
-    "just-bash": "^1.0.1",
+    "just-bash": "^2.0.0",
     "typescript": "^5.3.0",
     "vitest": "^4.0.1"
   },
   "peerDependencies": {
-    "just-bash": ">=1.0.0"
+    "just-bash": ">=2.0.0"
   },
   "peerDependenciesMeta": {
     "just-bash": {

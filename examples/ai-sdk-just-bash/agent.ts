@@ -13,7 +13,8 @@ import * as path from "node:path";
 import { glob } from "glob";
 import { anthropic } from "@ai-sdk/anthropic";
 import { streamText, stepCountIs } from "ai";
-import { createBashTool } from "just-bash/ai";
+import { createBashTool } from "bash-tool";
+import { Bash } from "just-bash";
 import { agentfs } from "agentfs-sdk/just-bash";
 
 export interface AgentRunner {
@@ -98,8 +99,12 @@ export async function createAgent(
     console.log("\nSeeded AgentFS with agentfs source files.");
   }
 
-  const bashTool = createBashTool({
-    fs,
+  // Create a just-bash Bash instance with AgentFS filesystem
+  const bash = new Bash({ fs });
+
+  // Create the bash toolkit with the just-bash sandbox
+  const bashToolkit = await createBashTool({
+    sandbox: bash,
     extraInstructions: `You are exploring the AgentFS codebase - a persistent filesystem for AI agents.
 The filesystem is backed by AgentFS itself (SQLite), so files persist across sessions.
 
@@ -113,7 +118,12 @@ Key directories:
 - /sdk/typescript/src - TypeScript SDK source
 - /cli/src - CLI source (Rust)
 - /integrations - Framework integrations`,
-    onCall: options.onToolCall,
+    onBeforeBashCall: options.onToolCall
+      ? ({ command }) => {
+          options.onToolCall!(command);
+          return { command };
+        }
+      : undefined,
   });
 
   const history: Array<{ role: "user" | "assistant"; content: string }> = [];
@@ -126,7 +136,7 @@ Key directories:
 
       const result = streamText({
         model: anthropic("claude-sonnet-4-20250514"),
-        tools: { bash: bashTool },
+        tools: bashToolkit.tools,
         stopWhen: stepCountIs(50),
         messages: history,
       });
