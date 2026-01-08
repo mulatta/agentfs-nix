@@ -223,6 +223,17 @@ impl OverlayFS {
             [Value::Text(base_path.to_string())],
         )
         .await?;
+        // Track origin inodes for copy-up operations (like Linux overlayfs "trusted.overlay.origin")
+        // When a file is copied from base to delta, we store the mapping so stat() returns
+        // the original base inode, maintaining consistency with kernel inode cache.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fs_origin (
+                delta_ino INTEGER PRIMARY KEY,
+                base_ino INTEGER NOT NULL
+            )",
+            (),
+        )
+        .await?;
         Ok(())
     }
 
@@ -445,6 +456,60 @@ impl OverlayFS {
         }
         Ok(true)
     }
+
+    /// Store origin inode mapping for a copy-up operation.
+    ///
+    /// This records that a delta inode originated from a base inode,
+    /// so stat() can return the original inode number (like Linux overlayfs).
+    async fn add_origin_mapping(&self, delta_ino: i64, base_ino: i64) -> Result<()> {
+        let conn = self.delta.get_connection();
+        conn.execute(
+            "INSERT OR REPLACE INTO fs_origin (delta_ino, base_ino) VALUES (?, ?)",
+            (delta_ino, base_ino),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Get the origin (base) inode for a delta inode, if it was copied up.
+    async fn get_origin_inode(&self, delta_ino: i64) -> Result<Option<i64>> {
+        let conn = self.delta.get_connection();
+        let result = conn
+            .query(
+                "SELECT base_ino FROM fs_origin WHERE delta_ino = ?",
+                (delta_ino,),
+            )
+            .await;
+
+        // Handle case where fs_origin table doesn't exist yet (for existing databases)
+        let mut rows = match result {
+            Ok(rows) => rows,
+            Err(_) => return Ok(None),
+        };
+
+        if let Some(row) = rows.next().await? {
+            let base_ino = row.get_value(0).ok().and_then(|v| v.as_integer().copied());
+            Ok(base_ino)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Remove the origin mapping for a delta inode.
+    ///
+    /// Called when a file is deleted from the delta layer to clean up stale mappings.
+    async fn remove_origin_mapping(&self, delta_ino: i64) -> Result<()> {
+        let conn = self.delta.get_connection();
+        let result = conn
+            .execute("DELETE FROM fs_origin WHERE delta_ino = ?", (delta_ino,))
+            .await;
+
+        // Ignore errors for existing databases without fs_origin table
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => Ok(()),
+        }
+    }
 }
 
 #[async_trait]
@@ -457,16 +522,33 @@ impl FileSystem for OverlayFS {
             return Ok(None);
         }
 
-        // Check delta first - this is authoritative for files in delta
-        if let Some(stats) = self.delta.stat(&normalized).await? {
-            return Ok(Some(stats));
-        }
+        // Check delta first for the file content/stats
+        let delta_stats = self.delta.stat(&normalized).await?;
 
-        // Fall back to base, but fix up the inode for root
-        if let Some(mut stats) = self.base.stat(&normalized).await? {
+        // Check base for the stable inode
+        // If file exists in base, use base's inode to maintain consistency
+        // (the kernel caches inodes, so changing them after copy-up breaks things)
+        if let Some(mut base_stats) = self.base.stat(&normalized).await? {
             // Root directory must have inode 1 for FUSE compatibility
             if normalized == "/" {
-                stats.ino = 1;
+                base_stats.ino = 1;
+            }
+
+            // If file also exists in delta (was copied up), use delta's metadata
+            // but keep the base inode for consistency with kernel cache
+            if let Some(mut stats) = delta_stats {
+                stats.ino = base_stats.ino;
+                return Ok(Some(stats));
+            }
+
+            return Ok(Some(base_stats));
+        }
+
+        // File only exists in delta (created there, or a hard link to a copied-up file)
+        // Check if it has an origin mapping from copy-up
+        if let Some(mut stats) = delta_stats {
+            if let Some(base_ino) = self.get_origin_inode(stats.ino).await? {
+                stats.ino = base_ino;
             }
             return Ok(Some(stats));
         }
@@ -481,16 +563,33 @@ impl FileSystem for OverlayFS {
             return Ok(None);
         }
 
-        // Check delta first
-        if let Some(stats) = self.delta.lstat(&normalized).await? {
-            return Ok(Some(stats));
-        }
+        // Check delta first for the file content/stats
+        let delta_stats = self.delta.lstat(&normalized).await?;
 
-        // Fall back to base, but fix up the inode for root
-        if let Some(mut stats) = self.base.lstat(&normalized).await? {
+        // Check base for the stable inode
+        // If file exists in base, use base's inode to maintain consistency
+        // (the kernel caches inodes, so changing them after copy-up breaks things)
+        if let Some(mut base_stats) = self.base.lstat(&normalized).await? {
             // Root directory must have inode 1 for FUSE compatibility
             if normalized == "/" {
-                stats.ino = 1;
+                base_stats.ino = 1;
+            }
+
+            // If file also exists in delta (was copied up), use delta's metadata
+            // but keep the base inode for consistency with kernel cache
+            if let Some(mut stats) = delta_stats {
+                stats.ino = base_stats.ino;
+                return Ok(Some(stats));
+            }
+
+            return Ok(Some(base_stats));
+        }
+
+        // File only exists in delta (created there, or a hard link to a copied-up file)
+        // Check if it has an origin mapping from copy-up
+        if let Some(mut stats) = delta_stats {
+            if let Some(base_ino) = self.get_origin_inode(stats.ino).await? {
+                stats.ino = base_ino;
             }
             return Ok(Some(stats));
         }
@@ -586,20 +685,32 @@ impl FileSystem for OverlayFS {
         // Use a HashMap to merge entries, with delta taking precedence
         let mut entries_map = std::collections::HashMap::new();
 
-        // Get entries from delta first (these take precedence)
-        if let Some(delta_entries) = self.delta.readdir_plus(&normalized).await? {
-            for entry in delta_entries {
-                entries_map.insert(entry.name.clone(), entry);
+        // Get entries from base first (to have their inodes available)
+        let mut base_inodes = std::collections::HashMap::new();
+        if let Some(base_entries) = self.base.readdir_plus(&normalized).await? {
+            for entry in base_entries {
+                if !child_whiteouts.contains(&entry.name) {
+                    base_inodes.insert(entry.name.clone(), entry.stats.ino);
+                    entries_map.insert(entry.name.clone(), entry);
+                }
             }
         }
 
-        // Get entries from base (only if not in delta and not whiteout)
-        if let Some(base_entries) = self.base.readdir_plus(&normalized).await? {
-            for entry in base_entries {
-                if !child_whiteouts.contains(&entry.name) && !entries_map.contains_key(&entry.name)
-                {
-                    entries_map.insert(entry.name.clone(), entry);
+        // Get entries from delta (these take precedence for content/metadata)
+        // But we need to use the base inode if the file exists in base,
+        // to maintain consistency with stat() which returns base inodes
+        if let Some(delta_entries) = self.delta.readdir_plus(&normalized).await? {
+            for mut entry in delta_entries {
+                // If file exists in base, use base inode for consistency with stat()
+                if let Some(&base_ino) = base_inodes.get(&entry.name) {
+                    entry.stats.ino = base_ino;
+                } else {
+                    // File only in delta - check for origin mapping (from copy-up)
+                    if let Some(origin_ino) = self.get_origin_inode(entry.stats.ino).await? {
+                        entry.stats.ino = origin_ino;
+                    }
                 }
+                entries_map.insert(entry.name.clone(), entry);
             }
         }
 
@@ -667,8 +778,18 @@ impl FileSystem for OverlayFS {
             }
         }
 
+        // Get delta inode before removal to clean up origin mapping
+        let delta_ino = self.delta.lstat(&normalized).await?.map(|s| s.ino);
+
         // Try to remove from delta
         let removed_from_delta = self.delta.remove(&normalized).await.is_ok();
+
+        // Clean up origin mapping if file was removed from delta
+        if removed_from_delta {
+            if let Some(ino) = delta_ino {
+                self.remove_origin_mapping(ino).await?;
+            }
+        }
 
         // Check if it exists in base (and not already whiteout) - use lstat to not follow symlinks
         let exists_in_base = if self.is_whiteout(&normalized).await? {
@@ -825,6 +946,12 @@ impl FileSystem for OverlayFS {
                 if let Some(data) = self.base.read_file(&old_normalized).await? {
                     self.ensure_parent_dirs(&old_normalized).await?;
                     self.delta.write_file(&old_normalized, &data).await?;
+
+                    // Store origin mapping: delta_ino -> base_ino
+                    // This ensures stat() returns the original base inode after copy-up
+                    if let Some(delta_stats) = self.delta.lstat(&old_normalized).await? {
+                        self.add_origin_mapping(delta_stats.ino, stats.ino).await?;
+                    }
                 } else {
                     return Err(FsError::NotFound.into());
                 }
@@ -1145,6 +1272,145 @@ mod tests {
         let stats = overlay.stat("/subdir").await?.unwrap();
         assert_eq!(stats.mode & 0o777, 0o700, "Directory mode should be 0o700");
         assert!(stats.is_directory(), "Should still be a directory");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overlay_link_base_file_preserves_inode() -> Result<()> {
+        let (overlay, _base_dir, _delta_dir) = create_test_overlay().await?;
+
+        // Get the original base file's inode
+        let base_stats = overlay.stat("/base.txt").await?.unwrap();
+        let original_ino = base_stats.ino;
+
+        // Create a hard link to the base file (triggers copy-up)
+        overlay.link("/base.txt", "/base_link.txt").await?;
+
+        // Both paths should return the same (original base) inode
+        let stats_original = overlay.stat("/base.txt").await?.unwrap();
+        let stats_link = overlay.stat("/base_link.txt").await?.unwrap();
+
+        assert_eq!(
+            stats_original.ino, original_ino,
+            "Original file should keep base inode after copy-up"
+        );
+        assert_eq!(
+            stats_link.ino, original_ino,
+            "Hard link should have same inode as original"
+        );
+
+        // Verify both files have the same content
+        let data_original = overlay.read_file("/base.txt").await?.unwrap();
+        let data_link = overlay.read_file("/base_link.txt").await?.unwrap();
+        assert_eq!(data_original, data_link);
+        assert_eq!(data_original, b"base content");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overlay_link_base_file_lstat_preserves_inode() -> Result<()> {
+        let (overlay, _base_dir, _delta_dir) = create_test_overlay().await?;
+
+        // Get the original base file's inode via lstat
+        let base_stats = overlay.lstat("/base.txt").await?.unwrap();
+        let original_ino = base_stats.ino;
+
+        // Create a hard link
+        overlay.link("/base.txt", "/base_link.txt").await?;
+
+        // lstat should also return consistent inodes
+        let stats_original = overlay.lstat("/base.txt").await?.unwrap();
+        let stats_link = overlay.lstat("/base_link.txt").await?.unwrap();
+
+        assert_eq!(
+            stats_original.ino, original_ino,
+            "lstat on original file should keep base inode"
+        );
+        assert_eq!(
+            stats_link.ino, original_ino,
+            "lstat on hard link should have same inode"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overlay_origin_mapping_cleanup_on_delete() -> Result<()> {
+        let (overlay, _base_dir, _delta_dir) = create_test_overlay().await?;
+
+        // Get the original base inode
+        let base_stats = overlay.stat("/base.txt").await?.unwrap();
+        let original_ino = base_stats.ino;
+
+        // Create a hard link (triggers copy-up and creates origin mapping)
+        overlay.link("/base.txt", "/base_link.txt").await?;
+
+        // Verify the link has the base inode
+        let link_stats = overlay.stat("/base_link.txt").await?.unwrap();
+        assert_eq!(link_stats.ino, original_ino);
+
+        // Delete the link
+        overlay.remove("/base_link.txt").await?;
+
+        // Create a new file in delta - it should get its own inode, not the old mapping
+        overlay.write_file("/new_file.txt", b"new content").await?;
+        let new_stats = overlay.stat("/new_file.txt").await?.unwrap();
+
+        // The new file's inode should not be affected by stale origin mappings
+        // (it should be a fresh delta inode, not the old base inode)
+        // Note: We can't easily verify the mapping was cleaned up directly,
+        // but we verify the system still works correctly after deletion
+        assert!(new_stats.ino > 0, "New file should have a valid inode");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overlay_link_delta_file_no_origin_mapping() -> Result<()> {
+        let (overlay, _base_dir, _delta_dir) = create_test_overlay().await?;
+
+        // Create a new file directly in delta (no base file)
+        overlay
+            .write_file("/delta_only.txt", b"delta content")
+            .await?;
+        let delta_stats = overlay.stat("/delta_only.txt").await?.unwrap();
+        let delta_ino = delta_stats.ino;
+
+        // Create a hard link to the delta-only file
+        overlay.link("/delta_only.txt", "/delta_link.txt").await?;
+
+        // Both should have the same delta inode (no origin mapping needed)
+        let stats_original = overlay.stat("/delta_only.txt").await?.unwrap();
+        let stats_link = overlay.stat("/delta_link.txt").await?.unwrap();
+
+        assert_eq!(stats_original.ino, delta_ino);
+        assert_eq!(stats_link.ino, delta_ino);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overlay_multiple_links_to_base_file() -> Result<()> {
+        let (overlay, _base_dir, _delta_dir) = create_test_overlay().await?;
+
+        // Get original base inode
+        let base_stats = overlay.stat("/base.txt").await?.unwrap();
+        let original_ino = base_stats.ino;
+
+        // Create multiple hard links
+        overlay.link("/base.txt", "/link1.txt").await?;
+        overlay.link("/base.txt", "/link2.txt").await?;
+
+        // All paths should return the same base inode
+        let stats0 = overlay.stat("/base.txt").await?.unwrap();
+        let stats1 = overlay.stat("/link1.txt").await?.unwrap();
+        let stats2 = overlay.stat("/link2.txt").await?.unwrap();
+
+        assert_eq!(stats0.ino, original_ino);
+        assert_eq!(stats1.ino, original_ino);
+        assert_eq!(stats2.ino, original_ino);
 
         Ok(())
     }

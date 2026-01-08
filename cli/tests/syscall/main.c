@@ -33,6 +33,7 @@ int main(int argc, char *argv[]) {
         {"pread_sparse", test_pread_sparse},
         {"link", test_link},
         {"unlink", test_unlink},
+        {"copyup_inode_stability", test_copyup_inode_stability},
     };
 
     int num_tests = sizeof(tests) / sizeof(tests[0]);

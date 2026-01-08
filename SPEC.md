@@ -1,6 +1,6 @@
 # Agent Filesystem Specification
 
-**Version:** 0.2
+**Version:** 0.3
 
 ## Introduction
 
@@ -548,12 +548,57 @@ SELECT path FROM fs_whiteout WHERE parent_path = ?
 3. Check if path exists in base layer → return base entry
 4. Return "not found"
 
+### Inode Origin Tracking
+
+When a file is copied from the base layer to the delta layer during a copy-up operation (e.g., when creating a hard link to a base file), the original base inode number must be preserved. This is necessary because the kernel caches inode numbers, and returning a different inode after copy-up causes ENOENT errors or cache inconsistencies.
+
+This mechanism is similar to Linux overlayfs's `trusted.overlay.origin` extended attribute, which stores a file handle to the lower inode.
+
+#### Table: `fs_origin`
+
+Maps delta layer inodes to their original base layer inodes.
+
+```sql
+CREATE TABLE fs_origin (
+  delta_ino INTEGER PRIMARY KEY,
+  base_ino INTEGER NOT NULL
+)
+```
+
+**Fields:**
+
+- `delta_ino` - Inode number in the delta layer
+- `base_ino` - Original inode number from the base layer
+
+#### Operations
+
+##### Store Origin Mapping
+
+When copying a file from base to delta during copy-up:
+
+```sql
+INSERT OR REPLACE INTO fs_origin (delta_ino, base_ino)
+VALUES (?, ?)
+```
+
+##### Get Origin Inode
+
+When stat'ing a file that exists in delta, check if it has an origin:
+
+```sql
+SELECT base_ino FROM fs_origin WHERE delta_ino = ?
+```
+
+If a mapping exists, return `base_ino` instead of `delta_ino` in stat results.
+
 ### Consistency Rules
 
 1. A whiteout MUST be removed when a new file is created at that path
 2. A whiteout MUST be created when deleting a file that exists in the base layer
 3. The `parent_path` MUST be correctly derived from `path`
 4. Whiteouts only affect overlay lookups, not the underlying base filesystem
+5. When copying a file from base to delta, the origin mapping MUST be stored
+6. When stat'ing a delta file with an origin mapping, the base inode MUST be returned
 
 ## Key-Value Data
 
@@ -639,6 +684,11 @@ Implementations MAY extend the key-value store schema with additional functional
 Such extensions SHOULD use separate tables to maintain referential integrity.
 
 ## Revision History
+
+### Version 0.3
+
+- Added `fs_origin` table to Overlay Filesystem for tracking copy-up origin inodes
+- Origin tracking ensures consistent inode numbers after copy-up (similar to Linux overlayfs `trusted.overlay.origin`)
 
 ### Version 0.2
 
