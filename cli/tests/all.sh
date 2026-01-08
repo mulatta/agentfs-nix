@@ -16,5 +16,6 @@ DIR="$(dirname "$0")"
 "$DIR/test-run-syscalls.sh" || true  # Requires user namespaces (may fail in CI)
 
 "$DIR/test-run-bash.sh" || true  # Requires user namespaces (may fail in CI)
+"$DIR/test-run-git.sh" || true  # Requires user namespaces (may fail in CI)
 "$DIR/test-mount.sh"
 "$DIR/test-symlinks.sh" || true  # Requires user namespaces (may fail in CI)

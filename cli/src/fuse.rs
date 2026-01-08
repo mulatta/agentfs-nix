@@ -864,13 +864,19 @@ impl Filesystem for AgentFSFuse {
         }
 
         let ino = stats.ino as u64;
+        let nlink = stats.nlink;
 
         let fs = self.fs.clone();
         let result = self.runtime.block_on(async move { fs.remove(&path).await });
 
         match result {
             Ok(()) => {
-                self.drop_path(ino);
+                // Only drop from path_cache if this was the last link.
+                // If nlink > 1, there are other hard links that still reference
+                // this inode, and the path_cache entry points to one of them.
+                if nlink <= 1 {
+                    self.drop_path(ino);
+                }
                 reply.ok();
             }
             Err(e) => reply.error(error_to_errno(&e)),

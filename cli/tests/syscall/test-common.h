@@ -49,5 +49,6 @@ int test_append_existing(const char *base_path);
 int test_pwrite_nested(const char *base_path);
 int test_pread_sparse(const char *base_path);
 int test_link(const char *base_path);
+int test_unlink(const char *base_path);
 
 #endif /* TEST_COMMON_H */

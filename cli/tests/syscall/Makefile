@@ -16,7 +16,8 @@ SRCS = main.c \
        test-getdents64.c \
        test-append.c \
        test-pread-sparse.c \
-       test-link.c
+       test-link.c \
+       test-unlink.c
 
 # Object files
 OBJS = $(SRCS:.c=.o)

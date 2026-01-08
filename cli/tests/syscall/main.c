@@ -32,6 +32,7 @@ int main(int argc, char *argv[]) {
         {"pwrite_nested", test_pwrite_nested},
         {"pread_sparse", test_pread_sparse},
         {"link", test_link},
+        {"unlink", test_unlink},
     };
 
     int num_tests = sizeof(tests) / sizeof(tests[0]);
