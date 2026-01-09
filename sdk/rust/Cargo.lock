@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "agentfs-sdk"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aegis",
  "anyhow",
@@ -2311,8 +2311,9 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "turso"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a621159d59641eabfa902036d89d717516e23e5cfd27fbae4f11abbfe4049a7"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -2330,8 +2331,9 @@ dependencies = [
 
 [[package]]
 name = "turso_core"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88f4783ed107ec61e8812f677ac07ad407c3bf7cf7338100e69b6ec4d3961297"
 dependencies = [
  "aegis",
  "aes",
@@ -2384,8 +2386,9 @@ dependencies = [
 
 [[package]]
 name = "turso_ext"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16ec3783e11b323290acf610d23b0f5b3df299b316fcb75c34a566775b9a1094"
 dependencies = [
  "chrono",
  "getrandom 0.3.4",
@@ -2394,8 +2397,9 @@ dependencies = [
 
 [[package]]
 name = "turso_macros"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd1550b8d42156cb866bea3306985ef1421d5ba3d858c83a3801f8457e675aba"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2404,8 +2408,9 @@ dependencies = [
 
 [[package]]
 name = "turso_parser"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bfb5736e1a56cc626d321f7c22eee4ec8bdfd7a6d0df6cdcbe825beeaa864bd"
 dependencies = [
  "bitflags",
  "memchr",
@@ -2418,8 +2423,9 @@ dependencies = [
 
 [[package]]
 name = "turso_sdk_kit"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62a13d75509acd55d66f9175ad80ca8385464d9553780eaafd7425d7a7d84a0b"
 dependencies = [
  "bindgen",
  "env_logger",
@@ -2432,8 +2438,9 @@ dependencies = [
 
 [[package]]
 name = "turso_sdk_kit_macros"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7144c0e0feb7cb54deb356cd3a304fa0754bbe7ac68cf04aa084d533d0fef96"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2442,8 +2449,9 @@ dependencies = [
 
 [[package]]
 name = "turso_sync_engine"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd1517e259d2b8fa11d5a49e781045573311246e14eecb73443ebb85e0cd60f6"
 dependencies = [
  "base64",
  "bytes",
@@ -2463,8 +2471,9 @@ dependencies = [
 
 [[package]]
 name = "turso_sync_sdk_kit"
-version = "0.4.2"
-source = "git+https://github.com/tursodatabase/turso.git?rev=44341b40ce503aa506a969b9528350c2633e6dbe#44341b40ce503aa506a969b9528350c2633e6dbe"
+version = "0.4.3-pre.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054be72f5057dab6f0b1c626b1444c539ebc86d89dee4381bdae352e608ac00a"
 dependencies = [
  "bindgen",
  "env_logger",
