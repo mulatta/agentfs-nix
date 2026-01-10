@@ -8,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 #[cfg(unix)]
 use libc;
 
-use super::{BoxedFile, DirEntry, File, FileSystem, FilesystemStats, Stats};
+use super::{BoxedFile, DirEntry, File, FileSystem, FilesystemStats, FsError, Stats};
 use std::sync::Arc;
 
 /// A filesystem backed by a host directory (passthrough)
@@ -352,7 +352,7 @@ impl FileSystem for HostFS {
         let full_path = self.resolve_path(path);
         // Verify the file exists
         if !full_path.exists() {
-            anyhow::bail!("File not found: {}", path);
+            return Err(FsError::NotFound.into());
         }
         Ok(Arc::new(HostFSFile {
             full_path,

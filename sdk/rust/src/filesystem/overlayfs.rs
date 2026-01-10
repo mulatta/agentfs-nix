@@ -363,7 +363,7 @@ impl File for OverlayFile {
         if let Some(ref file) = self.base_file {
             return file.fstat().await;
         }
-        anyhow::bail!("File not found")
+        Err(FsError::NotFound.into())
     }
 }
 
@@ -1196,7 +1196,7 @@ impl FileSystem for OverlayFS {
 
         // Check for whiteout
         if self.is_whiteout(&normalized) {
-            anyhow::bail!("File not found (whiteout): {}", path);
+            return Err(FsError::NotFound.into());
         }
 
         // Try to open from delta
@@ -1211,7 +1211,7 @@ impl FileSystem for OverlayFS {
 
         // Must exist in at least one layer
         if delta_file.is_none() && base_file.is_none() {
-            anyhow::bail!("File not found: {}", path);
+            return Err(FsError::NotFound.into());
         }
 
         Ok(Arc::new(OverlayFile {

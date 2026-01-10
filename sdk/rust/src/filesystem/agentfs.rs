@@ -303,7 +303,7 @@ impl File for AgentFSFile {
         if let Some(row) = rows.next().await? {
             AgentFS::build_stats_from_row(&row)
         } else {
-            anyhow::bail!("File not found")
+            Err(FsError::NotFound.into())
         }
     }
 }
@@ -1293,10 +1293,7 @@ impl AgentFS {
     /// - Extending: pads with zeros up to the new size
     pub async fn truncate(&self, path: &str, new_size: u64) -> Result<()> {
         let path = self.normalize_path(path);
-        let ino = self
-            .resolve_path(&path)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("File not found"))?;
+        let ino = self.resolve_path(&path).await?.ok_or(FsError::NotFound)?;
 
         // Get current size
         let mut stmt = self
@@ -1700,7 +1697,7 @@ impl AgentFS {
                 anyhow::bail!("Cannot create hard link to directory");
             }
         } else {
-            anyhow::bail!("Source inode not found");
+            return Err(FsError::NotFound.into());
         }
 
         // Get parent directory of new path
@@ -1713,7 +1710,7 @@ impl AgentFS {
         let parent_ino = self
             .resolve_path(&parent_path)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Parent directory does not exist"))?;
+            .ok_or(FsError::NotFound)?;
 
         let name = components.last().unwrap();
 
@@ -1915,7 +1912,7 @@ impl AgentFS {
                 .and_then(|v| v.as_integer().copied())
                 .unwrap_or(0) as u32
         } else {
-            anyhow::bail!("Inode not found");
+            return Err(FsError::NotFound.into());
         };
 
         // Preserve file type bits (upper bits), replace permission bits (lower 12 bits)
@@ -2178,10 +2175,7 @@ impl AgentFS {
     /// without requiring path lookups on each operation.
     pub async fn open(&self, path: &str) -> Result<BoxedFile> {
         let path = self.normalize_path(path);
-        let ino = self
-            .resolve_path(&path)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
+        let ino = self.resolve_path(&path).await?.ok_or(FsError::NotFound)?;
 
         Ok(Arc::new(AgentFSFile {
             conn: self.conn.clone(),
