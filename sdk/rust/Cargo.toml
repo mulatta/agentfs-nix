@@ -26,9 +26,14 @@ aegis = { version = "0.9.6", features = ["pure-rust"] }
 tempfile = "3"
 proptest = "1.4"
 criterion = { version = "0.5", features = ["async_tokio"] }
+rand = "0.8"
 
 [[bench]]
 name = "overlayfs"
+harness = false
+
+[[bench]]
+name = "workload"
 harness = false
 
 [profile.bench]
