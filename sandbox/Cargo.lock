@@ -92,7 +92,6 @@ name = "agentfs-sdk"
 version = "0.5.3"
 dependencies = [
  "aegis",
- "anyhow",
  "async-trait",
  "libc",
  "lru",
@@ -100,6 +99,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
  "turso",
 ]
 
