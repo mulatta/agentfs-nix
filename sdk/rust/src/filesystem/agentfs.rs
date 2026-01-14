@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use turso::transaction::{Transaction, TransactionBehavior};
 use turso::{Builder, Connection, Value};
 
 use super::{
@@ -164,12 +165,7 @@ impl File for AgentFSFile {
         }
 
         let conn = self.pool.get_connection().await?;
-
-        conn.prepare_cached("BEGIN IMMEDIATE")
-            .await?
-            .execute(())
-            .await?;
-
+        let txn = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         // Get current file size
         let mut stmt = conn
             .prepare_cached("SELECT size FROM fs_inode WHERE ino = ?")
@@ -202,8 +198,7 @@ impl File for AgentFSFile {
             .prepare_cached("UPDATE fs_inode SET size = ?, mtime = ? WHERE ino = ?")
             .await?;
         stmt.execute((new_size as i64, now, self.ino)).await?;
-
-        conn.prepare_cached("COMMIT").await?.execute(()).await?;
+        txn.commit().await?;
 
         Ok(())
     }
@@ -227,10 +222,7 @@ impl File for AgentFSFile {
 
         let chunk_size = self.chunk_size as u64;
 
-        conn.prepare_cached("BEGIN IMMEDIATE")
-            .await?
-            .execute(())
-            .await?;
+        let txn = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
 
         let result: Result<()> = async {
             if new_size == 0 {
@@ -286,11 +278,10 @@ impl File for AgentFSFile {
         .await;
 
         if result.is_err() {
-            let _ = conn.prepare_cached("ROLLBACK").await?.execute(()).await;
+            let _ = txn.rollback().await;
             return result;
         }
-
-        conn.prepare_cached("COMMIT").await?.execute(()).await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -1032,11 +1023,7 @@ impl AgentFS {
 
         let name = components.last().unwrap();
 
-        conn.prepare_cached("BEGIN IMMEDIATE")
-            .await?
-            .execute(())
-            .await?;
-
+        let txn = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let result: Result<()> = async {
             // Check if file exists (single query using parent_ino we already have)
             let ino = if let Some(ino) = self.lookup_child(&conn, parent_ino, name).await? {
@@ -1108,11 +1095,11 @@ impl AgentFS {
 
         match result {
             Ok(()) => {
-                conn.prepare_cached("COMMIT").await?.execute(()).await?;
+                txn.commit().await?;
                 Ok(())
             }
             Err(e) => {
-                let _ = conn.prepare_cached("ROLLBACK").await?.execute(()).await;
+                let _ = txn.rollback().await;
                 Err(e)
             }
         }
@@ -1159,10 +1146,7 @@ impl AgentFS {
             .prepare_cached("INSERT INTO fs_dentry (name, parent_ino, ino) VALUES (?, ?, ?)")
             .await?;
 
-        conn.prepare_cached("BEGIN IMMEDIATE")
-            .await?
-            .execute(())
-            .await?;
+        let txn = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let file_mode = S_IFREG | (mode & 0o7777);
@@ -1181,7 +1165,7 @@ impl AgentFS {
             .execute((name.as_str(), parent_ino, ino))
             .await?;
 
-        conn.prepare_cached("COMMIT").await?.execute(()).await?;
+        txn.commit().await?;
 
         self.dentry_cache.insert(parent_ino, name, ino);
 
@@ -1307,10 +1291,7 @@ impl AgentFS {
 
         let name = components.last().unwrap();
 
-        conn.prepare_cached("BEGIN IMMEDIATE")
-            .await?
-            .execute(())
-            .await?;
+        let txn = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
 
         let result: Result<()> = async {
             // Get or create the inode
@@ -1471,11 +1452,11 @@ impl AgentFS {
 
         match result {
             Ok(()) => {
-                conn.prepare_cached("COMMIT").await?.execute(()).await?;
+                txn.commit().await?;
                 Ok(())
             }
             Err(e) => {
-                let _ = conn.prepare_cached("ROLLBACK").await?.execute(()).await;
+                let _ = txn.rollback().await;
                 Err(e)
             }
         }
@@ -1510,10 +1491,7 @@ impl AgentFS {
 
         let chunk_size = self.chunk_size as u64;
 
-        conn.prepare_cached("BEGIN IMMEDIATE")
-            .await?
-            .execute(())
-            .await?;
+        let txn = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
 
         let result: Result<()> = async {
             if new_size == 0 {
@@ -1626,11 +1604,11 @@ impl AgentFS {
 
         match result {
             Ok(()) => {
-                conn.prepare_cached("COMMIT").await?.execute(()).await?;
+                txn.commit().await?;
                 Ok(())
             }
             Err(e) => {
-                let _ = conn.prepare_cached("ROLLBACK").await?.execute(()).await;
+                let _ = txn.rollback().await;
                 Err(e)
             }
         }
@@ -2179,10 +2157,7 @@ impl AgentFS {
         let src_name = src_name.clone();
         let dst_name = dst_name.clone();
 
-        conn.prepare_cached("BEGIN IMMEDIATE")
-            .await?
-            .execute(())
-            .await?;
+        let txn = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
 
         let result: Result<()> = async {
             // Check if destination exists (inside transaction for atomicity)
@@ -2279,7 +2254,7 @@ impl AgentFS {
 
         match result {
             Ok(()) => {
-                conn.prepare_cached("COMMIT").await?.execute(()).await?;
+                txn.commit().await?;
 
                 // Invalidate cache for source and destination
                 self.dentry_cache.remove(src_parent_ino, &src_name);
@@ -2291,7 +2266,7 @@ impl AgentFS {
                 Ok(())
             }
             Err(e) => {
-                let _ = conn.prepare_cached("ROLLBACK").await?.execute(()).await;
+                let _ = txn.rollback().await;
                 Err(e)
             }
         }
