@@ -336,6 +336,19 @@ impl AgentFSFile {
         let chunk_size = self.chunk_size as u64;
         let mut written = 0usize;
 
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        // get statements only once (in order to avoid heavy clone on every while iteration)
+        let mut select_stmt = conn
+            .prepare_cached("SELECT data FROM fs_data WHERE ino = ? AND chunk_index = ?")
+            .await?;
+        let mut insert_stmt = conn
+            .prepare_cached(
+                "INSERT OR REPLACE INTO fs_data (ino, chunk_index, data) VALUES (?, ?, ?)",
+            )
+            .await?;
         while written < data.len() {
             let current_offset = offset + written as u64;
             let chunk_index = (current_offset / chunk_size) as i64;
@@ -346,44 +359,44 @@ impl AgentFSFile {
             let remaining_data = data.len() - written;
             let to_write = std::cmp::min(remaining_in_chunk, remaining_data);
 
-            // Get existing chunk data (if any)
-            let mut stmt = conn
-                .prepare_cached("SELECT data FROM fs_data WHERE ino = ? AND chunk_index = ?")
-                .await?;
-            let mut rows = stmt.query((self.ino, chunk_index)).await?;
+            let mut chunk_data;
+            if to_write != chunk_size as usize {
+                // Get existing chunk data (if any)
+                let mut rows = select_stmt.query((self.ino, chunk_index)).await?;
 
-            let mut chunk_data = if let Some(row) = rows.next().await? {
-                row.get_value(0)
-                    .ok()
-                    .and_then(|v| {
-                        if let Value::Blob(b) = v {
-                            Some(b.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_default()
+                chunk_data = if let Some(row) = rows.next().await? {
+                    row.get_value(0)
+                        .ok()
+                        .and_then(|v| {
+                            if let Value::Blob(b) = v {
+                                Some(b)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                select_stmt.reset()?;
+
+                // Extend chunk if needed
+                if chunk_data.len() < offset_in_chunk + to_write {
+                    chunk_data.resize(offset_in_chunk + to_write, 0);
+                }
+
+                // Write data into chunk
+                chunk_data[offset_in_chunk..offset_in_chunk + to_write]
+                    .copy_from_slice(&data[written..written + to_write]);
             } else {
-                Vec::new()
-            };
-
-            // Extend chunk if needed
-            if chunk_data.len() < offset_in_chunk + to_write {
-                chunk_data.resize(offset_in_chunk + to_write, 0);
+                chunk_data = data[written..written + to_write].to_vec();
             }
 
-            // Write data into chunk
-            chunk_data[offset_in_chunk..offset_in_chunk + to_write]
-                .copy_from_slice(&data[written..written + to_write]);
-
             // Save chunk
-            let mut stmt = conn
-                .prepare_cached(
-                    "INSERT OR REPLACE INTO fs_data (ino, chunk_index, data) VALUES (?, ?, ?)",
-                )
+            insert_stmt
+                .execute((self.ino, chunk_index, Value::Blob(chunk_data)))
                 .await?;
-            stmt.execute((self.ino, chunk_index, Value::Blob(chunk_data)))
-                .await?;
+            insert_stmt.reset()?;
 
             written += to_write;
         }
@@ -733,6 +746,7 @@ impl AgentFS {
             return Ok(Some(ROOT_INO));
         }
 
+        let mut statement: Option<turso::Statement> = None;
         let mut current_ino = ROOT_INO;
         for component in components {
             // Check cache first
@@ -742,9 +756,17 @@ impl AgentFS {
             }
 
             // Cache miss - query database
-            let mut statement = conn
-                .prepare_cached("SELECT ino FROM fs_dentry WHERE parent_ino = ? AND name = ?")
-                .await?;
+            if let Some(statement) = &mut statement {
+                statement.reset()?;
+            } else {
+                statement = Some(
+                    conn.prepare_cached(
+                        "SELECT ino FROM fs_dentry WHERE parent_ino = ? AND name = ?",
+                    )
+                    .await?,
+                );
+            }
+            let statement = statement.as_mut().expect("statement was set above");
             let mut rows = statement.query((current_ino, component.as_str())).await?;
 
             let mut found_row = None;
@@ -808,18 +830,17 @@ impl AgentFS {
         let mut current_path = path;
         let max_symlink_depth = 40; // Standard limit for symlink following
 
+        let mut stmt = conn.prepare_cached(
+            "SELECT ino, mode, nlink, uid, gid, size, atime, mtime, ctime FROM fs_inode WHERE ino = ?",
+        ).await?;
         for _ in 0..max_symlink_depth {
             let ino = match self.resolve_path_with_conn(&conn, &current_path).await? {
                 Some(ino) => ino,
                 None => return Ok(None),
             };
 
-            let mut rows = conn
-                .query(
-                    "SELECT ino, mode, nlink, uid, gid, size, atime, mtime, ctime FROM fs_inode WHERE ino = ?",
-                    (ino,),
-                )
-                .await?;
+            stmt.reset()?;
+            let mut rows = stmt.query((ino,)).await?;
 
             if let Some(row) = rows.next().await? {
                 let mode = row
@@ -955,7 +976,7 @@ impl AgentFS {
         // Create inode
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
                 VALUES (?, 0, 0, 0, ?, ?, ?) RETURNING ino",
             )
@@ -1029,7 +1050,7 @@ impl AgentFS {
                 // Create new inode
                 let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
                 let mut stmt = conn
-                    .prepare(
+                    .prepare_cached(
                         "INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
                         VALUES (?, 0, 0, ?, ?, ?, ?) RETURNING ino",
                     )
@@ -1313,7 +1334,7 @@ impl AgentFS {
                     // Create new inode
                     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
                     let mut stmt = conn
-                        .prepare(
+                        .prepare_cached(
                             "INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
                         VALUES (?, 0, 0, 0, ?, ?, ?) RETURNING ino",
                         )
@@ -1661,17 +1682,14 @@ impl AgentFS {
             None => return Ok(None),
         };
 
+        let mut stmt = conn.prepare_cached("SELECT d.name, i.ino, i.mode, i.nlink, i.uid, i.gid, i.size, i.atime, i.mtime, i.ctime
+            FROM fs_dentry d
+            JOIN fs_inode i ON d.ino = i.ino
+            WHERE d.parent_ino = ?
+            ORDER BY d.name"
+        ).await?;
         // Single JOIN query to get all entry names and their stats (including link count)
-        let mut rows = conn
-            .query(
-                "SELECT d.name, i.ino, i.mode, i.nlink, i.uid, i.gid, i.size, i.atime, i.mtime, i.ctime
-                 FROM fs_dentry d
-                 JOIN fs_inode i ON d.ino = i.ino
-                 WHERE d.parent_ino = ?
-                 ORDER BY d.name",
-                (ino,),
-            )
-            .await?;
+        let mut rows = stmt.query((ino,)).await?;
 
         let mut entries = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -1788,7 +1806,7 @@ impl AgentFS {
         let size = target.len() as i64;
 
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
                  VALUES (?, 0, 0, ?, ?, ?, ?) RETURNING ino",
             )

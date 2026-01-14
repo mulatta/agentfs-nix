@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tracing;
 use turso::{Connection, Value};
 
 use super::{
@@ -303,6 +304,12 @@ impl OverlayFile {
 #[async_trait]
 impl File for OverlayFile {
     async fn pread(&self, offset: u64, size: u64) -> Result<Vec<u8>> {
+        tracing::debug!(
+            "OverlayFile::pread: path={}, offset={}, size={}",
+            self.path,
+            offset,
+            size
+        );
         // Prefer delta if available
         if let Some(ref file) = self.delta_file {
             return file.pread(offset, size).await;
@@ -316,6 +323,12 @@ impl File for OverlayFile {
     }
 
     async fn pwrite(&self, offset: u64, data: &[u8]) -> Result<()> {
+        tracing::debug!(
+            "OverlayFile::pwrite: path={}, offset={}, data_len={}",
+            self.path,
+            offset,
+            data.len()
+        );
         // If we already have a delta file handle, use it directly
         if let Some(ref delta_file) = self.delta_file {
             return delta_file.pwrite(offset, data).await;
@@ -346,6 +359,7 @@ impl File for OverlayFile {
     }
 
     async fn truncate(&self, size: u64) -> Result<()> {
+        tracing::debug!("OverlayFile::truncate: path={}, size={}", self.path, size);
         // If we already have a delta file handle, use it directly
         if let Some(ref delta_file) = self.delta_file {
             return delta_file.truncate(size).await;
@@ -376,6 +390,7 @@ impl File for OverlayFile {
     }
 
     async fn fsync(&self) -> Result<()> {
+        tracing::debug!("OverlayFile::fsync: path={}", self.path);
         // If we have a delta file handle, use it
         if let Some(ref delta_file) = self.delta_file {
             return delta_file.fsync().await;
@@ -395,6 +410,7 @@ impl File for OverlayFile {
     }
 
     async fn fstat(&self) -> Result<Stats> {
+        tracing::debug!("OverlayFile::fstat: path={}", self.path);
         // Prefer delta stats if available
         if let Some(ref file) = self.delta_file {
             return file.fstat().await;
@@ -754,6 +770,7 @@ impl OverlayFS {
 #[async_trait]
 impl FileSystem for OverlayFS {
     async fn stat(&self, path: &str) -> Result<Option<Stats>> {
+        tracing::debug!("OverlayFS::stat: path={}", path);
         let normalized = self.normalize_path(path);
 
         // Check for whiteout first
@@ -796,6 +813,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn lstat(&self, path: &str) -> Result<Option<Stats>> {
+        tracing::debug!("OverlayFS::lstat: path={}", path);
         let normalized = self.normalize_path(path);
 
         if self.is_whiteout(&normalized) {
@@ -837,6 +855,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn read_file(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        tracing::debug!("OverlayFS::read_file: path={}", path);
         let normalized = self.normalize_path(path);
 
         // Check if path is traversable (all parents are directories)
@@ -858,6 +877,11 @@ impl FileSystem for OverlayFS {
     }
 
     async fn write_file(&self, path: &str, data: &[u8]) -> Result<()> {
+        tracing::debug!(
+            "OverlayFS::write_file: path={}, data_len={}",
+            path,
+            data.len()
+        );
         let normalized = self.normalize_path(path);
 
         // Remove any whiteout for this path
@@ -874,6 +898,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn readdir(&self, path: &str) -> Result<Option<Vec<String>>> {
+        tracing::debug!("OverlayFS::readdir: path={}", path);
         let normalized = self.normalize_path(path);
 
         // Check for whiteout on directory itself
@@ -914,6 +939,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn readdir_plus(&self, path: &str) -> Result<Option<Vec<DirEntry>>> {
+        tracing::debug!("OverlayFS::readdir_plus: path={}", path);
         let normalized = self.normalize_path(path);
 
         // Check for whiteout on directory itself
@@ -970,6 +996,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn mkdir(&self, path: &str) -> Result<()> {
+        tracing::debug!("OverlayFS::mkdir: path={}", path);
         let normalized = self.normalize_path(path);
 
         // Check if already exists (in either layer, not whiteout)
@@ -995,6 +1022,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
+        tracing::debug!("OverlayFS::remove: path={}", path);
         let normalized = self.normalize_path(path);
 
         // Check if path is a symlink - symlinks don't have children, so skip directory checks
@@ -1058,6 +1086,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
+        tracing::debug!("OverlayFS::chmod: path={}, mode={:o}", path, mode);
         let normalized = self.normalize_path(path);
 
         // Check if whited-out
@@ -1101,6 +1130,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        tracing::debug!("OverlayFS::rename: from={}, to={}", from, to);
         let from_normalized = self.normalize_path(from);
         let to_normalized = self.normalize_path(to);
 
@@ -1157,6 +1187,11 @@ impl FileSystem for OverlayFS {
     }
 
     async fn symlink(&self, target: &str, linkpath: &str) -> Result<()> {
+        tracing::debug!(
+            "OverlayFS::symlink: target={}, linkpath={}",
+            target,
+            linkpath
+        );
         let normalized = self.normalize_path(linkpath);
 
         // Remove any whiteout
@@ -1170,6 +1205,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn link(&self, oldpath: &str, newpath: &str) -> Result<()> {
+        tracing::debug!("OverlayFS::link: oldpath={}, newpath={}", oldpath, newpath);
         let old_normalized = self.normalize_path(oldpath);
         let new_normalized = self.normalize_path(newpath);
 
@@ -1218,6 +1254,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn readlink(&self, path: &str) -> Result<Option<String>> {
+        tracing::debug!("OverlayFS::readlink: path={}", path);
         let normalized = self.normalize_path(path);
 
         if self.is_whiteout(&normalized) {
@@ -1234,11 +1271,13 @@ impl FileSystem for OverlayFS {
     }
 
     async fn statfs(&self) -> Result<FilesystemStats> {
+        tracing::debug!("OverlayFS::statfs");
         // Return delta stats (base stats would be misleading for overlay)
         self.delta.statfs().await
     }
 
     async fn open(&self, path: &str) -> Result<BoxedFile> {
+        tracing::debug!("OverlayFS::open: path={}", path);
         let normalized = self.normalize_path(path);
 
         // Check for whiteout
@@ -1271,6 +1310,7 @@ impl FileSystem for OverlayFS {
     }
 
     async fn create_file(&self, path: &str, mode: u32) -> Result<(Stats, BoxedFile)> {
+        tracing::debug!("OverlayFS::create_file: path={}, mode={:o}", path, mode);
         let normalized = self.normalize_path(path);
 
         // Remove any whiteout for this path
