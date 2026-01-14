@@ -304,7 +304,12 @@ impl OverlayFile {
 #[async_trait]
 impl File for OverlayFile {
     async fn pread(&self, offset: u64, size: u64) -> Result<Vec<u8>> {
-        tracing::debug!("OverlayFile::pread: path={}, offset={}, size={}", self.path, offset, size);
+        tracing::debug!(
+            "OverlayFile::pread: path={}, offset={}, size={}",
+            self.path,
+            offset,
+            size
+        );
         // Prefer delta if available
         if let Some(ref file) = self.delta_file {
             return file.pread(offset, size).await;
@@ -318,7 +323,12 @@ impl File for OverlayFile {
     }
 
     async fn pwrite(&self, offset: u64, data: &[u8]) -> Result<()> {
-        tracing::debug!("OverlayFile::pwrite: path={}, offset={}, data_len={}", self.path, offset, data.len());
+        tracing::debug!(
+            "OverlayFile::pwrite: path={}, offset={}, data_len={}",
+            self.path,
+            offset,
+            data.len()
+        );
         // If we already have a delta file handle, use it directly
         if let Some(ref delta_file) = self.delta_file {
             return delta_file.pwrite(offset, data).await;
@@ -867,7 +877,11 @@ impl FileSystem for OverlayFS {
     }
 
     async fn write_file(&self, path: &str, data: &[u8]) -> Result<()> {
-        tracing::debug!("OverlayFS::write_file: path={}, data_len={}", path, data.len());
+        tracing::debug!(
+            "OverlayFS::write_file: path={}, data_len={}",
+            path,
+            data.len()
+        );
         let normalized = self.normalize_path(path);
 
         // Remove any whiteout for this path
@@ -1173,7 +1187,11 @@ impl FileSystem for OverlayFS {
     }
 
     async fn symlink(&self, target: &str, linkpath: &str) -> Result<()> {
-        tracing::debug!("OverlayFS::symlink: target={}, linkpath={}", target, linkpath);
+        tracing::debug!(
+            "OverlayFS::symlink: target={}, linkpath={}",
+            target,
+            linkpath
+        );
         let normalized = self.normalize_path(linkpath);
 
         // Remove any whiteout

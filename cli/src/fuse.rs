@@ -208,7 +208,12 @@ impl Filesystem for AgentFSFuse {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        tracing::debug!("FUSE::setattr: ino={}, mode={:?}, size={:?}", ino, mode, size);
+        tracing::debug!(
+            "FUSE::setattr: ino={}, mode={:?}, size={:?}",
+            ino,
+            mode,
+            size
+        );
         // Handle chmod
         if let Some(new_mode) = mode {
             let Some(path) = self.path_cache.lock().get(&ino).cloned() else {
@@ -669,7 +674,12 @@ impl Filesystem for AgentFSFuse {
         _flags: i32,
         reply: ReplyCreate,
     ) {
-        tracing::debug!("FUSE::create: parent={}, name={:?}, mode={:o}", parent, name, mode);
+        tracing::debug!(
+            "FUSE::create: parent={}, name={:?}, mode={:o}",
+            parent,
+            name,
+            mode
+        );
         let Some(path) = self.lookup_path(parent, name) else {
             reply.error(libc::ENOENT);
             return;
@@ -709,7 +719,12 @@ impl Filesystem for AgentFSFuse {
         target: &Path,
         reply: ReplyEntry,
     ) {
-        tracing::debug!("FUSE::symlink: parent={}, link_name={:?}, target={:?}", parent, link_name, target);
+        tracing::debug!(
+            "FUSE::symlink: parent={}, link_name={:?}, target={:?}",
+            parent,
+            link_name,
+            target
+        );
         let Some(path) = self.lookup_path(parent, link_name) else {
             reply.error(libc::ENOENT);
             return;
@@ -766,7 +781,12 @@ impl Filesystem for AgentFSFuse {
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        tracing::debug!("FUSE::link: ino={}, newparent={}, newname={:?}", ino, newparent, newname);
+        tracing::debug!(
+            "FUSE::link: ino={}, newparent={}, newname={:?}",
+            ino,
+            newparent,
+            newname
+        );
         // Get the path for the source inode
         let Some(oldpath) = self.get_path(ino) else {
             reply.error(libc::ENOENT);
@@ -880,7 +900,13 @@ impl Filesystem for AgentFSFuse {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        tracing::debug!("FUSE::rename: parent={}, name={:?}, newparent={}, newname={:?}", parent, name, newparent, newname);
+        tracing::debug!(
+            "FUSE::rename: parent={}, name={:?}, newparent={}, newname={:?}",
+            parent,
+            name,
+            newparent,
+            newname
+        );
         let Some(from_path) = self.lookup_path(parent, name) else {
             reply.error(libc::ENOENT);
             return;
@@ -1008,7 +1034,12 @@ impl Filesystem for AgentFSFuse {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        tracing::debug!("FUSE::write: fh={}, offset={}, data_len={}", fh, offset, data.len());
+        tracing::debug!(
+            "FUSE::write: fh={}, offset={}, data_len={}",
+            fh,
+            offset,
+            data.len()
+        );
         let file = {
             let open_files = self.open_files.lock();
             let Some(open_file) = open_files.get(&fh) else {
