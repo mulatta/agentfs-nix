@@ -969,7 +969,7 @@ impl AgentFS {
         // Create inode
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
                 VALUES (?, 0, 0, 0, ?, ?, ?) RETURNING ino",
             )
@@ -1043,7 +1043,7 @@ impl AgentFS {
                 // Create new inode
                 let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
                 let mut stmt = conn
-                    .prepare(
+                    .prepare_cached(
                         "INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
                         VALUES (?, 0, 0, ?, ?, ?, ?) RETURNING ino",
                     )
@@ -1327,7 +1327,7 @@ impl AgentFS {
                     // Create new inode
                     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
                     let mut stmt = conn
-                        .prepare(
+                        .prepare_cached(
                             "INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
                         VALUES (?, 0, 0, 0, ?, ?, ?) RETURNING ino",
                         )
@@ -1799,7 +1799,7 @@ impl AgentFS {
         let size = target.len() as i64;
 
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "INSERT INTO fs_inode (mode, uid, gid, size, atime, mtime, ctime)
                  VALUES (?, 0, 0, ?, ?, ?, ?) RETURNING ino",
             )
