@@ -406,7 +406,11 @@ f d/e/3.md
     pub async fn encrypted_write_and_cat() {
         let (agentfs, path, _file) = encrypted_agentfs().await;
         let content = b"encrypted content";
-        agentfs.fs.write_file("secret.txt", content).await.unwrap();
+        agentfs
+            .fs
+            .write_file("secret.txt", content, 0, 0)
+            .await
+            .unwrap();
         drop(agentfs);
 
         let encryption = Some((TEST_KEY.to_string(), TEST_CIPHER.to_string()));
@@ -420,8 +424,16 @@ f d/e/3.md
     #[tokio::test]
     pub async fn encrypted_ls() {
         let (agentfs, path, _file) = encrypted_agentfs().await;
-        agentfs.fs.write_file("file1.txt", b"1").await.unwrap();
-        agentfs.fs.write_file("file2.txt", b"2").await.unwrap();
+        agentfs
+            .fs
+            .write_file("file1.txt", b"1", 0, 0)
+            .await
+            .unwrap();
+        agentfs
+            .fs
+            .write_file("file2.txt", b"2", 0, 0)
+            .await
+            .unwrap();
         drop(agentfs);
 
         let encryption = Some((TEST_KEY.to_string(), TEST_CIPHER.to_string()));
