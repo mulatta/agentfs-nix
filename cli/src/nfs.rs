@@ -11,7 +11,7 @@ use crate::nfsserve::nfs::{
     fattr3, fileid3, filename3, ftype3, nfspath3, nfsstat3, nfstime3, sattr3, set_gid3, set_mode3,
     set_size3, set_uid3, specdata3,
 };
-use crate::nfsserve::vfs::{DirEntry, NFSFileSystem, ReadDirResult, VFSCapabilities};
+use crate::nfsserve::vfs::{auth_unix, DirEntry, NFSFileSystem, ReadDirResult, VFSCapabilities};
 use agentfs_sdk::error::Error as SdkError;
 use agentfs_sdk::{
     FileSystem, Stats, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK,
@@ -386,18 +386,25 @@ impl NFSFileSystem for AgentNFS {
         &self,
         dirid: fileid3,
         filename: &filename3,
-        _attr: sattr3,
+        attr: sattr3,
+        auth: &auth_unix,
     ) -> Result<(fileid3, fattr3), nfsstat3> {
         let dir_path = self.get_path(dirid).await?;
         let dir_fs_ino = self.get_fs_ino(dirid).await?;
         let name = std::str::from_utf8(filename).map_err(|_| nfsstat3::NFS3ERR_INVAL)?;
         let full_path = Self::join_path(&dir_path, name);
 
-        // Create file with root uid/gid (permission checks removed)
+        // Use mode from sattr3 if provided, otherwise default to 0o644
+        let mode = match attr.mode {
+            set_mode3::mode(m) => m & 0o7777,
+            set_mode3::Void => 0o644,
+        };
+
+        // Create file with caller's uid/gid and requested mode
         let new_fs_ino = {
             let fs = self.fs.lock().await;
             let (stats, _file) = fs
-                .create_file(dir_fs_ino, name, S_IFREG | 0o644, 0, 0)
+                .create_file(dir_fs_ino, name, S_IFREG | mode, auth.uid, auth.gid)
                 .await
                 .map_err(error_to_nfsstat)?;
             stats.ino
@@ -416,6 +423,7 @@ impl NFSFileSystem for AgentNFS {
         &self,
         dirid: fileid3,
         filename: &filename3,
+        auth: &auth_unix,
     ) -> Result<fileid3, nfsstat3> {
         let dir_path = self.get_path(dirid).await?;
         let dir_fs_ino = self.get_fs_ino(dirid).await?;
@@ -434,9 +442,9 @@ impl NFSFileSystem for AgentNFS {
             return Err(nfsstat3::NFS3ERR_EXIST);
         }
 
-        // Create file with root uid/gid
+        // Create file with caller's uid/gid
         let (stats, _file) = fs
-            .create_file(dir_fs_ino, name, S_IFREG | 0o644, 0, 0)
+            .create_file(dir_fs_ino, name, S_IFREG | 0o644, auth.uid, auth.gid)
             .await
             .map_err(error_to_nfsstat)?;
 
@@ -452,19 +460,33 @@ impl NFSFileSystem for AgentNFS {
         &self,
         dirid: fileid3,
         dirname: &filename3,
+        attr: sattr3,
+        auth: &auth_unix,
     ) -> Result<(fileid3, fattr3), nfsstat3> {
         let dir_path = self.get_path(dirid).await?;
         let dir_fs_ino = self.get_fs_ino(dirid).await?;
         let name = std::str::from_utf8(dirname).map_err(|_| nfsstat3::NFS3ERR_INVAL)?;
         let full_path = Self::join_path(&dir_path, name);
 
+        // Use mode from sattr3 if provided, otherwise default to 0o755
+        let mode = match attr.mode {
+            set_mode3::mode(m) => m & 0o7777,
+            set_mode3::Void => 0o755,
+        };
+
         let new_fs_ino = {
             let fs = self.fs.lock().await;
 
             let stats = fs
-                .mkdir(dir_fs_ino, name, 0, 0)
+                .mkdir(dir_fs_ino, name, auth.uid, auth.gid)
                 .await
                 .map_err(error_to_nfsstat)?;
+
+            // Set the mode after creation (SDK mkdir doesn't take mode)
+            fs.chmod(stats.ino, S_IFDIR | mode)
+                .await
+                .map_err(error_to_nfsstat)?;
+
             stats.ino
         };
 
@@ -604,6 +626,7 @@ impl NFSFileSystem for AgentNFS {
         linkname: &filename3,
         symlink: &nfspath3,
         _attr: &sattr3,
+        auth: &auth_unix,
     ) -> Result<(fileid3, fattr3), nfsstat3> {
         let dir_path = self.get_path(dirid).await?;
         let dir_fs_ino = self.get_fs_ino(dirid).await?;
@@ -615,7 +638,7 @@ impl NFSFileSystem for AgentNFS {
             let fs = self.fs.lock().await;
 
             let stats = fs
-                .symlink(dir_fs_ino, name, target, 0, 0)
+                .symlink(dir_fs_ino, name, target, auth.uid, auth.gid)
                 .await
                 .map_err(error_to_nfsstat)?;
             stats.ino

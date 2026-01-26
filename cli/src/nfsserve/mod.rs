@@ -1,7 +1,8 @@
 #![cfg_attr(feature = "strict", deny(warnings))]
 
 mod context;
-mod rpc;
+pub mod permissions;
+pub mod rpc;
 mod rpcwire;
 mod write_counter;
 pub mod xdr;
