@@ -630,6 +630,35 @@ impl NFSFileSystem for AgentNFS {
         Ok(())
     }
 
+    async fn link(
+        &self,
+        id: fileid3,
+        dirid: fileid3,
+        filename: &filename3,
+    ) -> Result<fattr3, nfsstat3> {
+        let fs_ino = self.get_fs_ino(id).await?;
+        let dir_path = self.get_path(dirid).await?;
+        let dir_fs_ino = self.get_fs_ino(dirid).await?;
+        let name = std::str::from_utf8(filename).map_err(|_| nfsstat3::NFS3ERR_INVAL)?;
+        let full_path = Self::join_path(&dir_path, name);
+
+        let stats = {
+            let fs = self.fs.lock().await;
+            fs.link(fs_ino, dir_fs_ino, name)
+                .await
+                .map_err(error_to_nfsstat)?
+        };
+
+        // The link creates a new directory entry pointing to the same inode
+        // We need to add the new path to our inode map
+        self.inode_map
+            .write()
+            .await
+            .get_or_create_ino(&full_path, stats.ino);
+
+        Ok(self.stats_to_fattr(&stats, id))
+    }
+
     async fn readdir(
         &self,
         dirid: fileid3,

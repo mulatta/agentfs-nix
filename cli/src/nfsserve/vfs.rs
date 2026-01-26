@@ -195,6 +195,16 @@ pub trait NFSFileSystem: Sync {
         to_filename: &filename3,
     ) -> Result<(), nfsstat3>;
 
+    /// Creates a hard link to an existing file.
+    /// If not supported due to readonly file system
+    /// this should return Err(nfsstat3::NFS3ERR_ROFS)
+    async fn link(
+        &self,
+        id: fileid3,
+        dirid: fileid3,
+        filename: &filename3,
+    ) -> Result<fattr3, nfsstat3>;
+
     /// Returns the contents of a directory with pagination.
     /// Directory listing should be deterministic.
     /// Up to max_entries may be returned, and start_after is used

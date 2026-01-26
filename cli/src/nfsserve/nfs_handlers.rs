@@ -155,11 +155,11 @@ pub async fn handle_nfs(
         NFSProgram::NFSPROC3_SYMLINK => nfsproc3_symlink(xid, input, output, context).await?,
         NFSProgram::NFSPROC3_READLINK => nfsproc3_readlink(xid, input, output, context).await?,
         NFSProgram::NFSPROC3_MKNOD => nfsproc3_mknod(xid, input, output, context).await?,
+        NFSProgram::NFSPROC3_LINK => nfsproc3_link(xid, input, output, context).await?,
         _ => {
             warn!("Unimplemented message {:?}", prog);
             proc_unavail_reply_message(xid).serialize(output)?;
         } /*
-          NFSPROC3_LINK,
           NFSPROC3_COMMIT,
           INVALID*/
     }
@@ -2508,6 +2508,181 @@ pub async fn nfsproc3_symlink(
             // serialize CREATE3resfail
             make_success_reply(xid).serialize(output)?;
             e.serialize(output)?;
+            wcc_res.serialize(output)?;
+        }
+    }
+
+    Ok(())
+}
+
+/*
+      LINK3res NFSPROC3_LINK(LINK3args) = 15;
+
+      struct LINK3args {
+           nfs_fh3     file;
+           diropargs3  link;
+      };
+
+      struct LINK3resok {
+           post_op_attr   file_attributes;
+           wcc_data       linkdir_wcc;
+      };
+
+      struct LINK3resfail {
+           post_op_attr   file_attributes;
+           wcc_data       linkdir_wcc;
+      };
+
+      union LINK3res switch (nfsstat3 status) {
+      case NFS3_OK:
+           LINK3resok    resok;
+      default:
+           LINK3resfail  resfail;
+      };
+*/
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Default)]
+struct LINK3args {
+    file: nfs::nfs_fh3,
+    link: nfs::diropargs3,
+}
+XDRStruct!(LINK3args, file, link);
+
+pub async fn nfsproc3_link(
+    xid: u32,
+    input: &mut impl Read,
+    output: &mut impl Write,
+    context: &RPCContext,
+) -> Result<(), anyhow::Error> {
+    // if we do not have write capabilities
+    if !matches!(context.vfs.capabilities(), VFSCapabilities::ReadWrite) {
+        warn!("No write capabilities.");
+        make_success_reply(xid).serialize(output)?;
+        nfs::nfsstat3::NFS3ERR_ROFS.serialize(output)?;
+        nfs::post_op_attr::Void.serialize(output)?;
+        nfs::wcc_data::default().serialize(output)?;
+        return Ok(());
+    }
+
+    let mut args = LINK3args::default();
+    args.deserialize(input)?;
+
+    debug!("nfsproc3_link({:?}, {:?}) ", xid, args);
+
+    // Get the file to link to
+    let fileid = context.vfs.fh_to_id(&args.file);
+    if let Err(stat) = fileid {
+        make_success_reply(xid).serialize(output)?;
+        stat.serialize(output)?;
+        nfs::post_op_attr::Void.serialize(output)?;
+        nfs::wcc_data::default().serialize(output)?;
+        return Ok(());
+    }
+    let fileid = fileid.unwrap();
+
+    // Get file attributes
+    let file_attr = match context.vfs.getattr(fileid).await {
+        Ok(v) => v,
+        Err(stat) => {
+            make_success_reply(xid).serialize(output)?;
+            stat.serialize(output)?;
+            nfs::post_op_attr::Void.serialize(output)?;
+            nfs::wcc_data::default().serialize(output)?;
+            return Ok(());
+        }
+    };
+
+    // Cannot hard link directories
+    if matches!(file_attr.ftype, nfs::ftype3::NF3DIR) {
+        make_success_reply(xid).serialize(output)?;
+        nfs::nfsstat3::NFS3ERR_ISDIR.serialize(output)?;
+        nfs::post_op_attr::attributes(file_attr).serialize(output)?;
+        nfs::wcc_data::default().serialize(output)?;
+        return Ok(());
+    }
+
+    // Get the directory where the link will be created
+    let dirid = context.vfs.fh_to_id(&args.link.dir);
+    if let Err(stat) = dirid {
+        make_success_reply(xid).serialize(output)?;
+        stat.serialize(output)?;
+        nfs::post_op_attr::attributes(file_attr).serialize(output)?;
+        nfs::wcc_data::default().serialize(output)?;
+        return Ok(());
+    }
+    let dirid = dirid.unwrap();
+
+    // Get directory attributes
+    let dir_attr = match context.vfs.getattr(dirid).await {
+        Ok(v) => v,
+        Err(stat) => {
+            make_success_reply(xid).serialize(output)?;
+            stat.serialize(output)?;
+            nfs::post_op_attr::attributes(file_attr).serialize(output)?;
+            nfs::wcc_data::default().serialize(output)?;
+            return Ok(());
+        }
+    };
+
+    let pre_dir_attr = nfs::pre_op_attr::attributes(nfs::wcc_attr {
+        size: dir_attr.size,
+        mtime: dir_attr.mtime,
+        ctime: dir_attr.ctime,
+    });
+
+    // Check write and execute permission on directory
+    if !permissions::can_modify_directory(&context.auth, &dir_attr) {
+        debug!(
+            "link permission denied for uid={} on directory",
+            context.auth.uid
+        );
+        let post_dir_attr = match context.vfs.getattr(dirid).await {
+            Ok(v) => nfs::post_op_attr::attributes(v),
+            Err(_) => nfs::post_op_attr::Void,
+        };
+        make_success_reply(xid).serialize(output)?;
+        nfs::nfsstat3::NFS3ERR_ACCES.serialize(output)?;
+        nfs::post_op_attr::attributes(file_attr).serialize(output)?;
+        nfs::wcc_data {
+            before: pre_dir_attr,
+            after: post_dir_attr,
+        }
+        .serialize(output)?;
+        return Ok(());
+    }
+
+    // Create the link
+    let res = context.vfs.link(fileid, dirid, &args.link.name).await;
+
+    // Re-read dir attributes for post op attr
+    let post_dir_attr = match context.vfs.getattr(dirid).await {
+        Ok(v) => nfs::post_op_attr::attributes(v),
+        Err(_) => nfs::post_op_attr::Void,
+    };
+    let wcc_res = nfs::wcc_data {
+        before: pre_dir_attr,
+        after: post_dir_attr,
+    };
+
+    match res {
+        Ok(new_attr) => {
+            debug!("link success {:?}", xid);
+            make_success_reply(xid).serialize(output)?;
+            nfs::nfsstat3::NFS3_OK.serialize(output)?;
+            nfs::post_op_attr::attributes(new_attr).serialize(output)?;
+            wcc_res.serialize(output)?;
+        }
+        Err(e) => {
+            error!("link error {:?} --> {:?}", xid, e);
+            // Re-read file attributes
+            let post_file_attr = match context.vfs.getattr(fileid).await {
+                Ok(v) => nfs::post_op_attr::attributes(v),
+                Err(_) => nfs::post_op_attr::Void,
+            };
+            make_success_reply(xid).serialize(output)?;
+            e.serialize(output)?;
+            post_file_attr.serialize(output)?;
             wcc_res.serialize(output)?;
         }
     }
