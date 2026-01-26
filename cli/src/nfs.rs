@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentfs_sdk::error::Error as SdkError;
-use agentfs_sdk::{FileSystem, Stats, S_IFDIR, S_IFLNK, S_IFMT, S_IFREG};
+use agentfs_sdk::{
+    FileSystem, Stats, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK,
+};
 use async_trait::async_trait;
 use tokio::sync::{Mutex, RwLock};
 use zerofs_nfsserve::nfs::{
@@ -192,7 +194,17 @@ impl AgentNFS {
             S_IFREG => ftype3::NF3REG,
             S_IFDIR => ftype3::NF3DIR,
             S_IFLNK => ftype3::NF3LNK,
+            S_IFIFO => ftype3::NF3FIFO,
+            S_IFCHR => ftype3::NF3CHR,
+            S_IFBLK => ftype3::NF3BLK,
+            S_IFSOCK => ftype3::NF3SOCK,
             _ => ftype3::NF3REG,
+        };
+
+        // Extract major/minor from rdev for device files
+        let rdev = specdata3 {
+            specdata1: ((stats.rdev >> 8) & 0xff) as u32, // major
+            specdata2: (stats.rdev & 0xff) as u32,        // minor
         };
 
         fattr3 {
@@ -203,7 +215,7 @@ impl AgentNFS {
             gid: stats.gid,
             size: stats.size as u64,
             used: stats.size as u64,
-            rdev: specdata3::default(),
+            rdev,
             fsid: 0,
             fileid: ino,
             atime: nfstime3 {
@@ -856,15 +868,71 @@ impl NFSFileSystem for AgentNFS {
 
     async fn mknod(
         &self,
-        _auth: &AuthContext,
-        _dirid: fileid3,
-        _filename: &filename3,
-        _ftype: ftype3,
-        _attr: &sattr3,
-        _spec: Option<&specdata3>,
+        auth: &AuthContext,
+        dirid: fileid3,
+        filename: &filename3,
+        ftype: ftype3,
+        attr: &sattr3,
+        spec: Option<&specdata3>,
     ) -> Result<(fileid3, fattr3), nfsstat3> {
-        // Special files (devices, FIFOs, sockets) are not supported
-        Err(nfsstat3::NFS3ERR_NOTSUPP)
+        let dir_path = self.get_path(dirid).await?;
+        let dir_fs_ino = self.get_fs_ino(dirid).await?;
+        let name = std::str::from_utf8(filename).map_err(|_| nfsstat3::NFS3ERR_INVAL)?;
+        let full_path = Self::join_path(&dir_path, name);
+
+        // Convert NFS ftype3 to Unix mode bits
+        let mode_type = match ftype {
+            ftype3::NF3REG => S_IFREG,
+            ftype3::NF3FIFO => S_IFIFO,
+            ftype3::NF3CHR => S_IFCHR,
+            ftype3::NF3BLK => S_IFBLK,
+            ftype3::NF3SOCK => S_IFSOCK,
+            ftype3::NF3DIR | ftype3::NF3LNK => return Err(nfsstat3::NFS3ERR_BADTYPE),
+        };
+
+        // Extract rdev from specdata3 for device nodes
+        let rdev = match ftype {
+            ftype3::NF3CHR | ftype3::NF3BLK => {
+                let spec = spec.ok_or(nfsstat3::NFS3ERR_INVAL)?;
+                ((spec.specdata1 as u64) << 8) | (spec.specdata2 as u64 & 0xff)
+            }
+            _ => 0,
+        };
+
+        // Extract mode from sattr3 if provided
+        let perms = match attr.mode {
+            set_mode3::mode(m) => m & 0o7777,
+            set_mode3::Void => 0o644,
+        };
+        let mode = mode_type | perms;
+
+        let new_fs_ino = {
+            let fs = self.fs.lock().await;
+
+            let dir_stats = fs
+                .getattr(dir_fs_ino)
+                .await
+                .map_err(error_to_nfsstat)?
+                .ok_or(nfsstat3::NFS3ERR_NOENT)?;
+
+            if !Self::can_write_dir(auth, &dir_stats) {
+                return Err(nfsstat3::NFS3ERR_ACCES);
+            }
+
+            let stats = fs
+                .mknod(dir_fs_ino, name, mode, rdev, auth.uid, auth.gid)
+                .await
+                .map_err(error_to_nfsstat)?;
+            stats.ino
+        };
+
+        let ino = self
+            .inode_map
+            .write()
+            .await
+            .get_or_create_ino(&full_path, new_fs_ino);
+        let attr = self.getattr(auth, ino).await?;
+        Ok((ino, attr))
     }
 
     async fn link(

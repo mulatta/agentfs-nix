@@ -19,7 +19,8 @@ pub use turso::sync::{DatabaseSyncStats, PartialBootstrapStrategy, PartialSyncOp
 pub use filesystem::HostFS;
 pub use filesystem::{
     BoxedFile, DirEntry, File, FileSystem, FilesystemStats, FsError, OverlayFS, Stats,
-    DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, S_IFDIR, S_IFLNK, S_IFMT, S_IFREG,
+    DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT,
+    S_IFREG, S_IFSOCK,
 };
 pub use kvstore::KvStore;
 pub use toolcalls::{ToolCall, ToolCallStats, ToolCallStatus, ToolCalls};
