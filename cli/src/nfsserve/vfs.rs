@@ -1,5 +1,6 @@
-use super::nfs::*;
 use super::nfs;
+use super::nfs::*;
+pub use super::rpc::auth_unix;
 use async_trait::async_trait;
 use std::cmp::Ordering;
 use std::sync::Once;
@@ -133,28 +134,35 @@ pub trait NFSFileSystem: Sync {
     /// Creates a file with the following attributes.
     /// If not supported due to readonly file system
     /// this should return Err(nfsstat3::NFS3ERR_ROFS)
+    /// The auth parameter contains the caller's credentials for ownership.
     async fn create(
         &self,
         dirid: fileid3,
         filename: &filename3,
         attr: sattr3,
+        auth: &auth_unix,
     ) -> Result<(fileid3, fattr3), nfsstat3>;
 
     /// Creates a file if it does not already exist
     /// this should return Err(nfsstat3::NFS3ERR_ROFS)
+    /// The auth parameter contains the caller's credentials for ownership.
     async fn create_exclusive(
         &self,
         dirid: fileid3,
         filename: &filename3,
+        auth: &auth_unix,
     ) -> Result<fileid3, nfsstat3>;
 
     /// Makes a directory with the following attributes.
     /// If not supported dur to readonly file system
     /// this should return Err(nfsstat3::NFS3ERR_ROFS)
+    /// The auth parameter contains the caller's credentials for ownership.
     async fn mkdir(
         &self,
         dirid: fileid3,
         dirname: &filename3,
+        attr: sattr3,
+        auth: &auth_unix,
     ) -> Result<(fileid3, fattr3), nfsstat3>;
 
     /// Removes a file.
@@ -203,23 +211,21 @@ pub trait NFSFileSystem: Sync {
     /// Makes a symlink with the following attributes.
     /// If not supported due to readonly file system
     /// this should return Err(nfsstat3::NFS3ERR_ROFS)
+    /// The auth parameter contains the caller's credentials for ownership.
     async fn symlink(
         &self,
         dirid: fileid3,
         linkname: &filename3,
         symlink: &nfspath3,
         attr: &sattr3,
+        auth: &auth_unix,
     ) -> Result<(fileid3, fattr3), nfsstat3>;
 
     /// Reads a symlink
     async fn readlink(&self, id: fileid3) -> Result<nfspath3, nfsstat3>;
 
     /// Get static file system Information
-    async fn fsinfo(
-        &self,
-        root_fileid: fileid3,
-    ) -> Result<fsinfo3, nfsstat3> {
-
+    async fn fsinfo(&self, root_fileid: fileid3) -> Result<fsinfo3, nfsstat3> {
         let dir_attr: nfs::post_op_attr = match self.getattr(root_fileid).await {
             Ok(v) => nfs::post_op_attr::attributes(v),
             Err(_) => nfs::post_op_attr::Void,
