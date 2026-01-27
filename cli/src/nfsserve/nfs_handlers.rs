@@ -1948,9 +1948,23 @@ pub async fn nfsproc3_remove(
         ctime: dir_attr.ctime,
     });
 
-    // Check write and execute permission on parent directory (per RFC 1813, DELETE permission
-    // is checked against the containing directory, not the file itself)
-    if !permissions::can_modify_directory(&context.auth, &dir_attr) {
+    // Check permission to delete entry (includes sticky bit check)
+    let remove_allowed = if (dir_attr.mode & permissions::S_ISVTX) != 0 {
+        // Sticky bit set: need to look up entry attributes
+        match context.vfs.lookup(dirid, &dirops.name).await {
+            Ok(entry_id) => match context.vfs.getattr(entry_id).await {
+                Ok(entry_attr) => {
+                    permissions::can_delete_entry(&context.auth, &dir_attr, &entry_attr)
+                }
+                Err(_) => permissions::can_modify_directory(&context.auth, &dir_attr),
+            },
+            Err(_) => permissions::can_modify_directory(&context.auth, &dir_attr),
+        }
+    } else {
+        permissions::can_modify_directory(&context.auth, &dir_attr)
+    };
+
+    if !remove_allowed {
         debug!(
             "remove permission denied for uid={} on directory",
             context.auth.uid
@@ -2114,8 +2128,22 @@ pub async fn nfsproc3_rename(
         ctime: to_dir_attr.ctime,
     });
 
-    // Check write and execute permission on both directories
-    if !permissions::can_modify_directory(&context.auth, &from_dir_attr) {
+    // Check permission on source directory (includes sticky bit check)
+    let from_allowed = if (from_dir_attr.mode & permissions::S_ISVTX) != 0 {
+        match context.vfs.lookup(from_dirid, &fromdirops.name).await {
+            Ok(entry_id) => match context.vfs.getattr(entry_id).await {
+                Ok(entry_attr) => {
+                    permissions::can_delete_entry(&context.auth, &from_dir_attr, &entry_attr)
+                }
+                Err(_) => permissions::can_modify_directory(&context.auth, &from_dir_attr),
+            },
+            Err(_) => permissions::can_modify_directory(&context.auth, &from_dir_attr),
+        }
+    } else {
+        permissions::can_modify_directory(&context.auth, &from_dir_attr)
+    };
+
+    if !from_allowed {
         debug!(
             "rename permission denied for uid={} on source directory",
             context.auth.uid
@@ -2143,7 +2171,24 @@ pub async fn nfsproc3_rename(
         return Ok(());
     }
 
-    if !permissions::can_modify_directory(&context.auth, &to_dir_attr) {
+    // Check permission on target directory (includes sticky bit check if dest exists)
+    let to_allowed = if (to_dir_attr.mode & permissions::S_ISVTX) != 0 {
+        // Sticky bit on target dir: check if destination entry exists
+        match context.vfs.lookup(to_dirid, &todirops.name).await {
+            Ok(entry_id) => match context.vfs.getattr(entry_id).await {
+                Ok(entry_attr) => {
+                    permissions::can_delete_entry(&context.auth, &to_dir_attr, &entry_attr)
+                }
+                Err(_) => permissions::can_modify_directory(&context.auth, &to_dir_attr),
+            },
+            // Dest doesn't exist, just need write+execute on target dir
+            Err(_) => permissions::can_modify_directory(&context.auth, &to_dir_attr),
+        }
+    } else {
+        permissions::can_modify_directory(&context.auth, &to_dir_attr)
+    };
+
+    if !to_allowed {
         debug!(
             "rename permission denied for uid={} on target directory",
             context.auth.uid
