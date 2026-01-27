@@ -3171,10 +3171,18 @@ impl FileSystem for AgentFS {
         )
         .await?;
 
-        // Increment link count
+        // Increment link count and update ctime
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         conn.execute(
-            "UPDATE fs_inode SET nlink = nlink + 1 WHERE ino = ?",
-            (ino,),
+            "UPDATE fs_inode SET nlink = nlink + 1, ctime = ? WHERE ino = ?",
+            (now, ino),
+        )
+        .await?;
+
+        // Update parent directory ctime and mtime
+        conn.execute(
+            "UPDATE fs_inode SET ctime = ?, mtime = ? WHERE ino = ?",
+            (now, now, newparent_ino),
         )
         .await?;
 
