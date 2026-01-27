@@ -567,7 +567,7 @@ impl AgentFS {
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
             conn.execute(
                 "INSERT INTO fs_inode (ino, mode, nlink, uid, gid, size, atime, mtime, ctime)
-                VALUES (?, ?, 1, ?, ?, 0, ?, ?, ?)",
+                VALUES (?, ?, 2, ?, ?, 0, ?, ?, ?)",
                 (ROOT_INO, DEFAULT_DIR_MODE as i64, uid, gid, now, now, now),
             )
             .await?;
@@ -1045,11 +1045,19 @@ impl AgentFS {
             .await?;
         stmt.execute((name.as_str(), parent_ino, ino)).await?;
 
-        // Increment link count
+        // Set nlink to 2 for new directory (self "." + parent's dentry)
         let mut stmt = conn
-            .prepare_cached("UPDATE fs_inode SET nlink = nlink + 1 WHERE ino = ?")
+            .prepare_cached("UPDATE fs_inode SET nlink = 2 WHERE ino = ?")
             .await?;
         stmt.execute((ino,)).await?;
+
+        // Increment parent nlink (new directory's ".." link) and update timestamps
+        let mut stmt = conn
+            .prepare_cached(
+                "UPDATE fs_inode SET nlink = nlink + 1, ctime = ?, mtime = ? WHERE ino = ?",
+            )
+            .await?;
+        stmt.execute((now, now, parent_ino)).await?;
 
         // Populate dentry cache
         self.dentry_cache.insert(parent_ino, name, ino);
@@ -1997,6 +2005,12 @@ impl AgentFS {
             return Err(FsError::RootOperation.into());
         }
 
+        // Get stats to check if it's a directory
+        let stats = self
+            .stat_with_conn(&conn, &path)
+            .await?
+            .ok_or(FsError::NotFound)?;
+
         // Check if directory is empty
         let mut stmt = conn
             .prepare_cached("SELECT COUNT(*) FROM fs_dentry WHERE parent_ino = ?")
@@ -2042,6 +2056,17 @@ impl AgentFS {
             .prepare_cached("UPDATE fs_inode SET nlink = nlink - 1 WHERE ino = ?")
             .await?;
         stmt.execute((ino,)).await?;
+
+        // If removing a directory, decrement parent nlink (removed dir's ".." link)
+        if stats.is_directory() {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+            let mut stmt = conn
+                .prepare_cached(
+                    "UPDATE fs_inode SET nlink = nlink - 1, ctime = ?, mtime = ? WHERE ino = ?",
+                )
+                .await?;
+            stmt.execute((now, now, parent_ino)).await?;
+        }
 
         // Check if this was the last link to the inode
         let link_count = self.get_link_count(&conn, ino).await?;
@@ -2249,6 +2274,19 @@ impl AgentFS {
             ))
             .await?;
 
+            // If renaming a directory across parents, adjust parent nlink counts
+            if src_stats.is_directory() && src_parent_ino != dst_parent_ino {
+                let mut stmt = conn
+                    .prepare_cached("UPDATE fs_inode SET nlink = nlink - 1 WHERE ino = ?")
+                    .await?;
+                stmt.execute((src_parent_ino,)).await?;
+
+                let mut stmt = conn
+                    .prepare_cached("UPDATE fs_inode SET nlink = nlink + 1 WHERE ino = ?")
+                    .await?;
+                stmt.execute((dst_parent_ino,)).await?;
+            }
+
             // Update ctime of the inode
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -2259,6 +2297,20 @@ impl AgentFS {
                 .prepare_cached("UPDATE fs_inode SET ctime = ? WHERE ino = ?")
                 .await?;
             stmt.execute((now, src_ino)).await?;
+
+            // Update source parent directory timestamps
+            let mut stmt = conn
+                .prepare_cached("UPDATE fs_inode SET mtime = ?, ctime = ? WHERE ino = ?")
+                .await?;
+            stmt.execute((now, now, src_parent_ino)).await?;
+
+            // Update destination parent directory timestamps
+            if dst_parent_ino != src_parent_ino {
+                let mut stmt = conn
+                    .prepare_cached("UPDATE fs_inode SET mtime = ?, ctime = ? WHERE ino = ?")
+                    .await?;
+                stmt.execute((now, now, dst_parent_ino)).await?;
+            }
 
             Ok(())
         }
@@ -2770,15 +2822,17 @@ impl FileSystem for AgentFS {
             .await?;
         stmt.execute((name, parent_ino, ino)).await?;
 
-        // Increment link count
+        // Set nlink to 2 for new directory (self "." + parent's dentry)
         let mut stmt = conn
-            .prepare_cached("UPDATE fs_inode SET nlink = nlink + 1 WHERE ino = ?")
+            .prepare_cached("UPDATE fs_inode SET nlink = 2 WHERE ino = ?")
             .await?;
         stmt.execute((ino,)).await?;
 
-        // Update parent directory ctime and mtime
+        // Increment parent nlink (new directory's ".." link) and update timestamps
         let mut stmt = conn
-            .prepare_cached("UPDATE fs_inode SET ctime = ?, mtime = ? WHERE ino = ?")
+            .prepare_cached(
+                "UPDATE fs_inode SET nlink = nlink + 1, ctime = ?, mtime = ? WHERE ino = ?",
+            )
             .await?;
         stmt.execute((now, now, parent_ino)).await?;
 
@@ -2788,7 +2842,7 @@ impl FileSystem for AgentFS {
         Ok(Stats {
             ino,
             mode: dir_mode,
-            nlink: 1,
+            nlink: 2,
             uid,
             gid,
             size: 0,
@@ -3159,13 +3213,22 @@ impl FileSystem for AgentFS {
         // Invalidate cache
         self.dentry_cache.remove(parent_ino, name);
 
-        // Decrement link count
+        // Decrement link count on removed directory
         let mut stmt = conn
             .prepare_cached("UPDATE fs_inode SET nlink = nlink - 1 WHERE ino = ?")
             .await?;
         stmt.execute((ino,)).await?;
 
-        // Delete inode (directories have nlink = 1 when empty)
+        // Decrement parent nlink (removed directory's ".." link) and update timestamps
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let mut stmt = conn
+            .prepare_cached(
+                "UPDATE fs_inode SET nlink = nlink - 1, ctime = ?, mtime = ? WHERE ino = ?",
+            )
+            .await?;
+        stmt.execute((now, now, parent_ino)).await?;
+
+        // Delete inode if no more links
         let link_count = self.get_link_count(&conn, ino).await?;
         if link_count == 0 {
             let mut stmt = conn
@@ -3313,11 +3376,15 @@ impl FileSystem for AgentFS {
                     .await?;
                 stmt.execute((newparent_ino, newname)).await?;
 
-                // Decrement link count
+                // Decrement link count and update ctime on destination inode
+                let now_dec = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
                 let mut stmt = conn
-                    .prepare_cached("UPDATE fs_inode SET nlink = nlink - 1 WHERE ino = ?")
+                    .prepare_cached("UPDATE fs_inode SET nlink = nlink - 1, ctime = ? WHERE ino = ?")
                     .await?;
-                stmt.execute((dst_ino,)).await?;
+                stmt.execute((now_dec, dst_ino)).await?;
 
                 // Clean up destination inode if no more links
                 let link_count = self.get_link_count(&conn, dst_ino).await?;
@@ -3346,6 +3413,20 @@ impl FileSystem for AgentFS {
             stmt.execute((newparent_ino, newname, oldparent_ino, oldname))
                 .await?;
 
+            // If renaming a directory across parents, adjust parent nlink counts
+            // (the ".." link moves from old parent to new parent)
+            if src_stats.is_directory() && oldparent_ino != newparent_ino {
+                let mut stmt = conn
+                    .prepare_cached("UPDATE fs_inode SET nlink = nlink - 1 WHERE ino = ?")
+                    .await?;
+                stmt.execute((oldparent_ino,)).await?;
+
+                let mut stmt = conn
+                    .prepare_cached("UPDATE fs_inode SET nlink = nlink + 1 WHERE ino = ?")
+                    .await?;
+                stmt.execute((newparent_ino,)).await?;
+            }
+
             // Update ctime of the inode
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -3356,6 +3437,20 @@ impl FileSystem for AgentFS {
                 .prepare_cached("UPDATE fs_inode SET ctime = ? WHERE ino = ?")
                 .await?;
             stmt.execute((now, src_ino)).await?;
+
+            // Update source parent directory timestamps
+            let mut stmt = conn
+                .prepare_cached("UPDATE fs_inode SET mtime = ?, ctime = ? WHERE ino = ?")
+                .await?;
+            stmt.execute((now, now, oldparent_ino)).await?;
+
+            // Update destination parent directory timestamps
+            if newparent_ino != oldparent_ino {
+                let mut stmt = conn
+                    .prepare_cached("UPDATE fs_inode SET mtime = ?, ctime = ? WHERE ino = ?")
+                    .await?;
+                stmt.execute((now, now, newparent_ino)).await?;
+            }
 
             Ok(())
         }

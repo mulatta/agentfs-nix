@@ -16,6 +16,7 @@ pub const S_IXGRP: u32 = 0o010; // Group execute
 pub const S_IROTH: u32 = 0o004; // Other read
 pub const S_IWOTH: u32 = 0o002; // Other write
 pub const S_IXOTH: u32 = 0o001; // Other execute
+pub const S_ISVTX: u32 = 0o1000; // Sticky bit
 
 /// NFS ACCESS procedure permission bits (from RFC 1813)
 pub const ACCESS3_READ: u32 = 0x0001;
@@ -151,6 +152,19 @@ pub fn compute_access(auth: &auth_unix, attr: &fattr3, requested: u32) -> u32 {
 /// This requires write AND execute permission on the directory.
 pub fn can_modify_directory(auth: &auth_unix, dir_attr: &fattr3) -> bool {
     can_write(auth, dir_attr) && can_execute(auth, dir_attr)
+}
+
+/// Check if caller can delete/rename an entry in a directory.
+/// When the directory has the sticky bit set, only root, the directory
+/// owner, or the file owner can delete/rename entries.
+pub fn can_delete_entry(auth: &auth_unix, dir_attr: &fattr3, entry_attr: &fattr3) -> bool {
+    if !can_modify_directory(auth, dir_attr) {
+        return false;
+    }
+    if (dir_attr.mode & S_ISVTX) == 0 {
+        return true;
+    }
+    auth.uid == 0 || auth.uid == dir_attr.uid || auth.uid == entry_attr.uid
 }
 
 /// Check if caller is the owner of the file (or root).
