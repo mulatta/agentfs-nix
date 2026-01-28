@@ -203,14 +203,8 @@ impl File for AgentFSFile {
             0
         };
 
-        // If writing beyond current size, extend with zeros first
-        if offset > current_size {
-            let zeros = vec![0u8; (offset - current_size) as usize];
-            self.write_data_at_offset_with_conn(&conn, current_size, &zeros)
-                .await?;
-        }
-
-        // Write the actual data
+        // Write the actual data (sparse gaps are handled by pread which fills
+        // missing chunks with zeros, so no need to zero-fill here)
         self.write_data_at_offset_with_conn(&conn, offset, data)
             .await?;
 
