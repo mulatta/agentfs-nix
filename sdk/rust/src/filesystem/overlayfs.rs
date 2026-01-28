@@ -349,7 +349,8 @@ impl OverlayFS {
         let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
         let mut current_path = String::new();
-        let mut current_parent_ino: i64 = 1; // Delta root
+        let mut current_delta_ino: i64 = 1; // Delta root
+        let mut current_base_ino: i64 = 1; // Base root
 
         for component in components.iter().take(components.len().saturating_sub(1)) {
             current_path = format!("{}/{}", current_path, component);
@@ -359,19 +360,24 @@ impl OverlayFS {
 
             // Check if directory exists in delta
             if let Some(stats) =
-                FileSystem::lookup(&self.delta, current_parent_ino, component).await?
+                FileSystem::lookup(&self.delta, current_delta_ino, component).await?
             {
                 if stats.is_directory() {
-                    current_parent_ino = stats.ino;
+                    current_delta_ino = stats.ino;
+                    // Advance base in parallel so it stays in sync
+                    if let Some(bs) = self.base.lookup(current_base_ino, component).await? {
+                        current_base_ino = bs.ino;
+                    }
                     continue;
                 } else {
                     return Err(FsError::NotADirectory.into());
                 }
             }
 
-            // Not in delta, check base and copy metadata
-            let base_stats = self.base.lookup(current_parent_ino, component).await?;
+            // Not in delta, check base (using the base inode, not delta inode)
+            let base_stats = self.base.lookup(current_base_ino, component).await?;
             let (dir_uid, dir_gid) = if let Some(s) = &base_stats {
+                current_base_ino = s.ino;
                 (s.uid, s.gid)
             } else {
                 (uid, gid)
@@ -380,14 +386,14 @@ impl OverlayFS {
             // Create directory in delta
             let new_stats = FileSystem::mkdir(
                 &self.delta,
-                current_parent_ino,
+                current_delta_ino,
                 component,
                 0o755,
                 dir_uid,
                 dir_gid,
             )
             .await?;
-            current_parent_ino = new_stats.ino;
+            current_delta_ino = new_stats.ino;
         }
 
         Ok(())
@@ -542,23 +548,31 @@ impl FileSystem for OverlayFS {
 
         // Try delta first - need to find the corresponding delta parent
         let delta_parent_ino = if parent_info.layer == Layer::Delta {
-            parent_info.underlying_ino
+            Some(parent_info.underlying_ino)
         } else {
             // Parent is in base, walk the path in delta to find corresponding directory
             let mut ino: i64 = 1; // Start at delta root
+            let mut found_all = true;
             for comp in parent_info.path.split('/').filter(|s| !s.is_empty()) {
                 if let Some(s) = self.delta.lookup(ino, comp).await? {
                     ino = s.ino;
                 } else {
-                    // Path doesn't exist in delta, use current position
+                    found_all = false;
                     break;
                 }
             }
-            ino
+            if found_all {
+                Some(ino)
+            } else {
+                None
+            }
         };
 
-        // Look up in delta
-        if let Some(delta_stats) = self.delta.lookup(delta_parent_ino, name).await? {
+        // Look up in delta (only if we resolved the correct parent)
+        if let Some(delta_stats) = match delta_parent_ino {
+            Some(ino) => self.delta.lookup(ino, name).await?,
+            None => None,
+        } {
             let ino = self.get_or_create_overlay_ino(Layer::Delta, delta_stats.ino, &path);
             let mut stats = delta_stats;
 
@@ -1717,6 +1731,281 @@ mod tests {
             file_lookup.is_some(),
             "Should find 'test.txt' inside 'debug'"
         );
+
+        Ok(())
+    }
+
+    /// Test that lookup in a base subdirectory does not return an unrelated
+    /// delta entry with the same name from a wrong parent.
+    ///
+    /// Reproduces the ENOTDIR bug:
+    ///   1. Base has /sdk/rust/ (directories)
+    ///   2. Delta has a *file* named "rust" under delta root (from some unrelated op)
+    ///   3. lookup(sdk_ino, "rust") should return the base *directory*, not the delta file
+    ///
+    /// The bug: when parent is Base layer, the delta path walk breaks early
+    /// (because "sdk" doesn't exist in delta) and uses delta root as parent.
+    /// Then delta.lookup(root, "rust") finds the unrelated file and returns it.
+    #[tokio::test]
+    async fn test_overlay_lookup_base_subdir_not_shadowed_by_wrong_delta_parent() -> Result<()> {
+        // Base: /sdk/rust/Cargo.toml (nested directories + file)
+        let base_dir = tempdir()?;
+        std::fs::create_dir_all(base_dir.path().join("sdk/rust"))?;
+        std::fs::write(
+            base_dir.path().join("sdk/rust/Cargo.toml"),
+            b"[package]\nname = \"test\"",
+        )?;
+
+        let base = Arc::new(HostFS::new(base_dir.path())?);
+
+        let delta_dir = tempdir()?;
+        let db_path = delta_dir.path().join("delta.db");
+        let delta = AgentFS::new(db_path.to_str().unwrap()).await?;
+
+        let overlay = OverlayFS::new(base, delta);
+        overlay.init(base_dir.path().to_str().unwrap()).await?;
+
+        // Create a *file* named "rust" at the overlay root (in delta).
+        // This is the entry that could shadow the base directory if the delta
+        // path walk uses the wrong parent inode.
+        let (_file_stats, file) = overlay
+            .create_file(ROOT_INO, "rust", DEFAULT_FILE_MODE, 0, 0)
+            .await?;
+        file.pwrite(0, b"this is a file, not a directory").await?;
+
+        // Lookup "sdk" from root — should be a base directory
+        let sdk_stats = overlay.lookup(ROOT_INO, "sdk").await?.unwrap();
+        assert!(sdk_stats.is_directory(), "sdk should be a directory");
+
+        // Lookup "rust" under "sdk" — MUST return the base *directory*, not
+        // the delta *file* named "rust" that lives under root.
+        let rust_stats = overlay.lookup(sdk_stats.ino, "rust").await?.unwrap();
+        assert!(
+            rust_stats.is_directory(),
+            "sdk/rust should be a directory from base, not the file from delta root"
+        );
+
+        // Verify we can traverse further into sdk/rust/Cargo.toml
+        let toml_stats = overlay.lookup(rust_stats.ino, "Cargo.toml").await?.unwrap();
+        assert!(toml_stats.is_file(), "Cargo.toml should be a file");
+
+        Ok(())
+    }
+
+    /// Test that readdir_plus and lookup agree on entry types for base dirs.
+    ///
+    /// readdir_plus for a Base-layer directory only returns base entries,
+    /// while lookup checks delta first. They must agree on types.
+    #[tokio::test]
+    async fn test_overlay_readdir_plus_consistent_with_lookup_for_base_dir() -> Result<()> {
+        let base_dir = tempdir()?;
+        std::fs::create_dir_all(base_dir.path().join("sdk/rust"))?;
+        std::fs::write(base_dir.path().join("sdk/rust/lib.rs"), b"fn main() {}")?;
+
+        let base = Arc::new(HostFS::new(base_dir.path())?);
+
+        let delta_dir = tempdir()?;
+        let db_path = delta_dir.path().join("delta.db");
+        let delta = AgentFS::new(db_path.to_str().unwrap()).await?;
+
+        let overlay = OverlayFS::new(base, delta);
+        overlay.init(base_dir.path().to_str().unwrap()).await?;
+
+        // Create a file named "rust" at the root in delta (wrong-parent scenario)
+        let (_stats, file) = overlay
+            .create_file(ROOT_INO, "rust", DEFAULT_FILE_MODE, 0, 0)
+            .await?;
+        file.pwrite(0, b"decoy").await?;
+
+        // Lookup "sdk" to get its overlay inode
+        let sdk_stats = overlay.lookup(ROOT_INO, "sdk").await?.unwrap();
+
+        // readdir_plus on "sdk" should list "rust" as a directory
+        let entries = overlay
+            .readdir_plus(sdk_stats.ino)
+            .await?
+            .expect("readdir_plus should succeed on sdk");
+        let rust_entry = entries.iter().find(|e| e.name == "rust");
+        assert!(rust_entry.is_some(), "readdir_plus should list 'rust'");
+        assert!(
+            rust_entry.unwrap().stats.is_directory(),
+            "readdir_plus should report 'rust' as directory"
+        );
+
+        // lookup on "sdk" for "rust" should also return a directory
+        let rust_lookup = overlay.lookup(sdk_stats.ino, "rust").await?.unwrap();
+        assert!(
+            rust_lookup.is_directory(),
+            "lookup should also report 'rust' as directory (consistent with readdir_plus)"
+        );
+
+        Ok(())
+    }
+
+    /// Test lookup through deeply nested base directories when an unrelated
+    /// file exists at an intermediate name in the delta root.
+    ///
+    /// Base: /a/b/c/file.txt
+    /// Delta root has file named "b"
+    /// lookup(a_ino, "b") must return the base directory, not the delta file.
+    #[tokio::test]
+    async fn test_overlay_lookup_deep_nesting_with_delta_name_collision() -> Result<()> {
+        let base_dir = tempdir()?;
+        std::fs::create_dir_all(base_dir.path().join("a/b/c"))?;
+        std::fs::write(base_dir.path().join("a/b/c/file.txt"), b"deep content")?;
+
+        let base = Arc::new(HostFS::new(base_dir.path())?);
+
+        let delta_dir = tempdir()?;
+        let db_path = delta_dir.path().join("delta.db");
+        let delta = AgentFS::new(db_path.to_str().unwrap()).await?;
+
+        let overlay = OverlayFS::new(base, delta);
+        overlay.init(base_dir.path().to_str().unwrap()).await?;
+
+        // Create files named "b" and "c" at delta root — potential collisions
+        let (_stats, file) = overlay
+            .create_file(ROOT_INO, "b", DEFAULT_FILE_MODE, 0, 0)
+            .await?;
+        file.pwrite(0, b"decoy b").await?;
+        let (_stats, file) = overlay
+            .create_file(ROOT_INO, "c", DEFAULT_FILE_MODE, 0, 0)
+            .await?;
+        file.pwrite(0, b"decoy c").await?;
+
+        // Walk the base path: root → a → b → c → file.txt
+        let a_stats = overlay.lookup(ROOT_INO, "a").await?.unwrap();
+        assert!(a_stats.is_directory(), "a should be a directory");
+
+        let b_stats = overlay.lookup(a_stats.ino, "b").await?.unwrap();
+        assert!(
+            b_stats.is_directory(),
+            "a/b should be a directory, not the delta file 'b'"
+        );
+
+        let c_stats = overlay.lookup(b_stats.ino, "c").await?.unwrap();
+        assert!(
+            c_stats.is_directory(),
+            "a/b/c should be a directory, not the delta file 'c'"
+        );
+
+        let file_stats = overlay.lookup(c_stats.ino, "file.txt").await?.unwrap();
+        assert!(file_stats.is_file());
+
+        // Read the file to verify correct traversal
+        let file = overlay.open(file_stats.ino).await?;
+        let content = file.pread(0, 100).await?;
+        assert_eq!(content, b"deep content");
+
+        Ok(())
+    }
+
+    /// Test that after a copy-up creates directories in delta, lookup still
+    /// returns correct types for sibling entries in the base.
+    ///
+    /// Scenario:
+    ///   1. Base has /sdk/rust/ and /sdk/python/ (two sibling dirs)
+    ///   2. Modify a file under /sdk/rust/ → triggers copy-up, creates
+    ///      "sdk" and "rust" dirs in delta
+    ///   3. Lookup /sdk/python/ must still work (base directory)
+    #[tokio::test]
+    async fn test_overlay_lookup_sibling_base_dirs_after_copy_up() -> Result<()> {
+        let base_dir = tempdir()?;
+        std::fs::create_dir_all(base_dir.path().join("sdk/rust"))?;
+        std::fs::create_dir_all(base_dir.path().join("sdk/python"))?;
+        std::fs::write(base_dir.path().join("sdk/rust/lib.rs"), b"fn main() {}")?;
+        std::fs::write(base_dir.path().join("sdk/python/main.py"), b"print('hi')")?;
+
+        let base = Arc::new(HostFS::new(base_dir.path())?);
+
+        let delta_dir = tempdir()?;
+        let db_path = delta_dir.path().join("delta.db");
+        let delta = AgentFS::new(db_path.to_str().unwrap()).await?;
+
+        let overlay = OverlayFS::new(base, delta);
+        overlay.init(base_dir.path().to_str().unwrap()).await?;
+
+        // Navigate to sdk/rust/lib.rs and modify it (triggers copy-up)
+        let sdk_stats = overlay.lookup(ROOT_INO, "sdk").await?.unwrap();
+        let rust_stats = overlay.lookup(sdk_stats.ino, "rust").await?.unwrap();
+        let lib_stats = overlay.lookup(rust_stats.ino, "lib.rs").await?.unwrap();
+        let lib_file = overlay.open(lib_stats.ino).await?;
+        lib_file
+            .pwrite(0, b"fn main() { println!(\"hello\"); }")
+            .await?;
+
+        // Now lookup the sibling: sdk/python must still be a directory
+        let python_stats = overlay.lookup(sdk_stats.ino, "python").await?.unwrap();
+        assert!(
+            python_stats.is_directory(),
+            "sdk/python should still be a directory after copy-up of sdk/rust/lib.rs"
+        );
+
+        // And sdk/python/main.py must be accessible
+        let main_py = overlay.lookup(python_stats.ino, "main.py").await?.unwrap();
+        assert!(main_py.is_file());
+        let file = overlay.open(main_py.ino).await?;
+        let content = file.pread(0, 100).await?;
+        assert_eq!(content, b"print('hi')");
+
+        Ok(())
+    }
+
+    /// Test the exact cargo scenario: path dependency at ../sdk/rust/Cargo.toml
+    /// accessed after some delta writes have occurred.
+    #[tokio::test]
+    async fn test_overlay_cargo_path_dependency_scenario() -> Result<()> {
+        // Simulate the agentfs repo structure:
+        // /cli/Cargo.toml
+        // /sdk/rust/Cargo.toml
+        let base_dir = tempdir()?;
+        std::fs::create_dir_all(base_dir.path().join("cli/src"))?;
+        std::fs::write(
+            base_dir.path().join("cli/Cargo.toml"),
+            b"[package]\nname = \"cli\"",
+        )?;
+        std::fs::write(base_dir.path().join("cli/src/main.rs"), b"fn main() {}")?;
+        std::fs::create_dir_all(base_dir.path().join("sdk/rust/src"))?;
+        std::fs::write(
+            base_dir.path().join("sdk/rust/Cargo.toml"),
+            b"[package]\nname = \"sdk\"",
+        )?;
+        std::fs::write(
+            base_dir.path().join("sdk/rust/src/lib.rs"),
+            b"pub fn hello() {}",
+        )?;
+
+        let base = Arc::new(HostFS::new(base_dir.path())?);
+
+        let delta_dir = tempdir()?;
+        let db_path = delta_dir.path().join("delta.db");
+        let delta = AgentFS::new(db_path.to_str().unwrap()).await?;
+
+        let overlay = OverlayFS::new(base, delta);
+        overlay.init(base_dir.path().to_str().unwrap()).await?;
+
+        // Simulate some writes in cli/ (like cargo creating target/)
+        let cli_stats = overlay.lookup(ROOT_INO, "cli").await?.unwrap();
+        let _target_stats = overlay.mkdir(cli_stats.ino, "target", 0o755, 0, 0).await?;
+
+        // Now simulate cargo resolving ../sdk/rust/Cargo.toml
+        // This is the path that fails with ENOTDIR in the bug report
+        let sdk_stats = overlay.lookup(ROOT_INO, "sdk").await?.unwrap();
+        assert!(sdk_stats.is_directory(), "sdk must be a directory");
+
+        let rust_stats = overlay.lookup(sdk_stats.ino, "rust").await?.unwrap();
+        assert!(
+            rust_stats.is_directory(),
+            "sdk/rust must be a directory (ENOTDIR bug)"
+        );
+
+        let toml_stats = overlay.lookup(rust_stats.ino, "Cargo.toml").await?.unwrap();
+        assert!(toml_stats.is_file(), "Cargo.toml must be a file");
+
+        // Also verify reading the file works
+        let file = overlay.open(toml_stats.ino).await?;
+        let content = file.pread(0, 100).await?;
+        assert_eq!(content, b"[package]\nname = \"sdk\"");
 
         Ok(())
     }
