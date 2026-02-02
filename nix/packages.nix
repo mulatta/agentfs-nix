@@ -11,10 +11,13 @@
       ...
     }:
     let
+      hashes = builtins.fromJSON (builtins.readFile ./hashes.json);
 
       # Nightly required for reverie (unstable features)
       rustToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
       craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
+
+      pythonPackages = pkgs.python3Packages;
 
       srcFilter =
         path: type:
@@ -179,11 +182,100 @@
           };
         }
       );
+
+      pyturso = pythonPackages.buildPythonPackage rec {
+        pname = "pyturso";
+        inherit (hashes.pyturso) version;
+        format = "pyproject";
+
+        src = pkgs.fetchPypi {
+          inherit pname version;
+          inherit (hashes.pyturso) hash;
+        };
+
+        cargoDeps = pkgs.rustPlatform.importCargoLock {
+          lockFile = ./pyturso-Cargo.lock;
+          outputHashes = hashes.pyturso.cargoOutputHashes;
+        };
+
+        nativeBuildInputs = with pkgs; [
+          maturin
+          rustPlatform.cargoSetupHook
+          rustPlatform.maturinBuildHook
+        ];
+
+        propagatedBuildInputs = with pythonPackages; [ typing-extensions ];
+
+        doCheck = false; # requires database
+
+        meta = {
+          description = "Python binding for Turso database client";
+          homepage = "https://github.com/tursodatabase/pyturso";
+          license = lib.licenses.mit;
+        };
+      };
+
+      agentfs-sdk-python = pythonPackages.buildPythonPackage rec {
+        pname = "agentfs-sdk";
+        version = "0.6.0-pre.4";
+        format = "pyproject";
+
+        src = lib.cleanSource "${self}/sdk/python";
+
+        nativeBuildInputs = with pythonPackages; [
+          setuptools
+          wheel
+        ];
+
+        propagatedBuildInputs = [ pyturso ];
+
+        doCheck = false; # requires agentfs server
+
+        meta = {
+          description = "AgentFS Python SDK - A filesystem and key-value store for AI agents";
+          homepage = "https://github.com/tursodatabase/agentfs";
+          license = lib.licenses.mit;
+        };
+      };
+
+      agentfs-sdk-typescript = pkgs.buildNpmPackage rec {
+        pname = "agentfs-sdk";
+        version = "0.6.0-pre.4";
+
+        src = lib.cleanSource "${self}/sdk/typescript";
+
+        inherit (hashes.typescriptSdk) npmDepsHash;
+
+        buildPhase = ''
+          runHook preBuild
+          npm run build
+          runHook postBuild
+        '';
+
+        installPhase = ''
+          runHook preInstall
+          mkdir -p $out/lib/node_modules/${pname}
+          cp -r dist $out/lib/node_modules/${pname}/
+          cp package.json $out/lib/node_modules/${pname}/
+          runHook postInstall
+        '';
+
+        meta = {
+          description = "AgentFS TypeScript SDK";
+          homepage = "https://github.com/tursodatabase/agentfs";
+          license = lib.licenses.mit;
+        };
+      };
     in
     {
       packages = {
         default = agentfs;
-        inherit agentfs agentfs-sdk;
+        inherit
+          agentfs
+          agentfs-sdk
+          agentfs-sdk-python
+          agentfs-sdk-typescript
+          ;
       }
       // lib.optionalAttrs (agentfs-sandbox != null) { inherit agentfs-sandbox; };
     };
