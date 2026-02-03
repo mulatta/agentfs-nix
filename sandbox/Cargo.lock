@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "agentfs-sandbox"
-version = "0.6.0-pre.4"
+version = "0.6.0-pre.5"
 dependencies = [
  "agentfs-sdk",
  "anyhow",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "agentfs-sdk"
-version = "0.6.0-pre.4"
+version = "0.6.0-pre.5"
 dependencies = [
  "aegis",
  "async-trait",
@@ -135,9 +135,9 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "arc-swap"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d03449bb8ca2cc2ef70869af31463d1ae5ccc8fa3e334b307203fbf815207e"
+checksum = "9ded5f9a03ac8f24d1b8a25101ee812cd32cdc8c50a4c50237de2c4915850e73"
 dependencies = [
  "rustversion",
 ]
@@ -271,9 +271,9 @@ checksum = "5dd9dc738b7a8311c7ade152424974d8115f2cdad61e8dab8dac9f2362298510"
 
 [[package]]
 name = "bytemuck"
-version = "1.24.0"
+version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fbdf580320f38b612e485521afda1ee26d10cc9884efaaa750d383e13e3c5f4"
+checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -671,9 +671,9 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flate2"
-version = "1.1.8"
+version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369"
+checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -908,9 +908,9 @@ dependencies = [
 
 [[package]]
 name = "git2"
-version = "0.20.3"
+version = "0.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e2b37e2f62729cdada11f0e6b3b6fe383c69c29fc619e391223e12856af308c"
+checksum = "7b88256088d75a56f8ecfa070513a775dd9107f6530ef14919dac831af9cfe2b"
 dependencies = [
  "bitflags 2.10.0",
  "libc",
@@ -1085,13 +1085,12 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.19"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "727805d60e7938b76b826a6ef209eb70eaa1812794f9424d4a4e2d740662df5f"
+checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
  "bytes",
  "futures-channel",
- "futures-core",
  "futures-util",
  "http",
  "http-body",
@@ -2084,7 +2083,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "reverie"
 version = "0.1.0"
-source = "git+https://github.com/facebookexperimental/reverie#67d69c9d1174e328663f7552b767cc958d9c08ff"
+source = "git+https://github.com/facebookexperimental/reverie#c2f631d15383bae5965bcb6b95243b6453a24792"
 dependencies = [
  "addr2line",
  "anyhow",
@@ -2111,7 +2110,7 @@ dependencies = [
 [[package]]
 name = "reverie-memory"
 version = "0.1.0"
-source = "git+https://github.com/facebookexperimental/reverie#67d69c9d1174e328663f7552b767cc958d9c08ff"
+source = "git+https://github.com/facebookexperimental/reverie#c2f631d15383bae5965bcb6b95243b6453a24792"
 dependencies = [
  "syscalls",
 ]
@@ -2119,7 +2118,7 @@ dependencies = [
 [[package]]
 name = "reverie-process"
 version = "0.1.0"
-source = "git+https://github.com/facebookexperimental/reverie#67d69c9d1174e328663f7552b767cc958d9c08ff"
+source = "git+https://github.com/facebookexperimental/reverie#c2f631d15383bae5965bcb6b95243b6453a24792"
 dependencies = [
  "bincode",
  "bitflags 2.10.0",
@@ -2136,7 +2135,7 @@ dependencies = [
 [[package]]
 name = "reverie-ptrace"
 version = "0.1.0"
-source = "git+https://github.com/facebookexperimental/reverie#67d69c9d1174e328663f7552b767cc958d9c08ff"
+source = "git+https://github.com/facebookexperimental/reverie#c2f631d15383bae5965bcb6b95243b6453a24792"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2168,7 +2167,7 @@ dependencies = [
 [[package]]
 name = "reverie-syscalls"
 version = "0.1.0"
-source = "git+https://github.com/facebookexperimental/reverie#67d69c9d1174e328663f7552b767cc958d9c08ff"
+source = "git+https://github.com/facebookexperimental/reverie#c2f631d15383bae5965bcb6b95243b6453a24792"
 dependencies = [
  "bitflags 2.10.0",
  "derive_more",
@@ -2183,7 +2182,7 @@ dependencies = [
 [[package]]
 name = "reverie-util"
 version = "0.1.0"
-source = "git+https://github.com/facebookexperimental/reverie#67d69c9d1174e328663f7552b767cc958d9c08ff"
+source = "git+https://github.com/facebookexperimental/reverie#c2f631d15383bae5965bcb6b95243b6453a24792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2321,7 +2320,7 @@ checksum = "a50f4cf475b65d88e057964e0e9bb1f0aa9bbb2036dc65c64596b42932536984"
 [[package]]
 name = "safeptrace"
 version = "0.1.0"
-source = "git+https://github.com/facebookexperimental/reverie#67d69c9d1174e328663f7552b767cc958d9c08ff"
+source = "git+https://github.com/facebookexperimental/reverie#c2f631d15383bae5965bcb6b95243b6453a24792"
 dependencies = [
  "bitflags 2.10.0",
  "futures 0.3.31",
@@ -2507,9 +2506,9 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "slab"
-version = "0.4.11"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
@@ -3788,18 +3787,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.36"
+version = "0.8.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dafd85c832c1b68bbb4ec0c72c7f6f4fc5179627d2bc7c26b30e4c0cc11e76cc"
+checksum = "7456cf00f0685ad319c5b1693f291a650eaf345e941d082fc4e03df8a03996ac"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.36"
+version = "0.8.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cb7e4e8436d9db52fbd6625dbf2f45243ab84994a72882ec8227b99e72b439a"
+checksum = "1328722bbf2115db7e19d69ebcc15e795719e2d66b60827c6a69a117365e37a0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3862,6 +3861,6 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.17"
+version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02aae0f83f69aafc94776e879363e9771d7ecbffe2c7fbb6c14c5e00dfe88439"
+checksum = "3ff05f8caa9038894637571ae6b9e29466c1f4f829d26c9b28f869a29cbe3445"
