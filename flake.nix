@@ -1,5 +1,5 @@
 {
-  description = "PROJ_NAME";
+  description = "agentfs-nix";
 
   inputs = {
     # keep-sorted start
