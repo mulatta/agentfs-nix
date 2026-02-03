@@ -55,15 +55,10 @@
             openssl.dev
           ];
 
-        buildInputs =
-          lib.optionals pkgs.stdenv.isLinux [
-            pkgs.libunwind
-            pkgs.openssl
-          ]
-          ++ lib.optionals pkgs.stdenv.isDarwin [
-            pkgs.darwin.apple_sdk.frameworks.Security
-            pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-          ];
+        buildInputs = lib.optionals pkgs.stdenv.isLinux [
+          pkgs.libunwind
+          pkgs.openssl
+        ];
       };
 
       sdkCargoArtifacts = craneLib.buildDepsOnly (
