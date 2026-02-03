@@ -139,11 +139,10 @@
           src = cliSrc;
           pname = "agentfs-deps";
           cargoExtraArgs = lib.optionalString (!pkgs.stdenv.isLinux) "--no-default-features";
+          # Cargo resolves all path deps even with --no-default-features
           preBuild = ''
             mkdir -p ../sdk
             cp -r ${sdkSrc} ../sdk/rust
-          ''
-          + lib.optionalString pkgs.stdenv.isLinux ''
             mkdir -p ../sandbox
             cp -r ${sandboxSrc}/* ../sandbox/
           '';
@@ -162,8 +161,6 @@
           preBuild = ''
             mkdir -p ../sdk
             cp -r ${sdkSrc} ../sdk/rust
-          ''
-          + lib.optionalString pkgs.stdenv.isLinux ''
             mkdir -p ../sandbox
             cp -r ${sandboxSrc}/* ../sandbox/
           '';
@@ -261,10 +258,8 @@
           license = lib.licenses.mit;
         };
       };
-    in
-    {
+
       packages = {
-        default = agentfs;
         inherit
           agentfs
           agentfs-sdk
@@ -273,5 +268,11 @@
           ;
       }
       // lib.optionalAttrs (agentfs-sandbox != null) { inherit agentfs-sandbox; };
+    in
+    {
+      packages = packages // {
+        default = agentfs;
+      };
+      checks = lib.mapAttrs' (name: drv: lib.nameValuePair "pkgs-${name}" drv) packages;
     };
 }
