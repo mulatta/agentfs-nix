@@ -24,7 +24,7 @@
             # Build dependencies
             pkg-config
           ]
-          ++ lib.optionals stdenv.isLinux [
+          ++ lib.optionals stdenv.hostPlatform.isLinux [
             # FUSE development (Linux only)
             fuse3
             # libunwind for reverie sandbox on Linux
@@ -32,7 +32,7 @@
             # openssl for various crates
             openssl
           ]
-          ++ lib.optionals stdenv.isDarwin [
+          ++ lib.optionals stdenv.hostPlatform.isDarwin [
             # macOS frameworks
             darwin.apple_sdk.frameworks.Security
             darwin.apple_sdk.frameworks.SystemConfiguration

@@ -17,8 +17,6 @@
       rustToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
       craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-      pythonPackages = pkgs.python3Packages;
-
       srcFilter =
         path: type:
         (craneLib.filterCargoSources path type)
@@ -40,6 +38,19 @@
         filter = srcFilter;
       };
 
+      # preBuild snippets for crates with path dependencies
+      sdkPathDeps = ''
+        mkdir -p ../sdk
+        cp -r ${sdkSrc} ../sdk/rust
+      '';
+
+      allPathDeps = ''
+        mkdir -p ../sdk
+        cp -r ${sdkSrc} ../sdk/rust
+        mkdir -p ../sandbox
+        cp -r ${sandboxSrc}/* ../sandbox/
+      '';
+
       commonArgs = {
         strictDeps = true;
 
@@ -49,16 +60,18 @@
             pkg-config
             rustPlatform.bindgenHook
           ]
-          ++ lib.optionals stdenv.isLinux [
+          ++ lib.optionals stdenv.hostPlatform.isLinux [
             fuse3
             libunwind.dev # reverie sandbox
             openssl.dev
           ];
 
-        buildInputs = lib.optionals pkgs.stdenv.isLinux [
-          pkgs.libunwind
-          pkgs.openssl
-        ];
+        buildInputs =
+          with pkgs;
+          lib.optionals stdenv.hostPlatform.isLinux [
+            libunwind
+            openssl
+          ];
       };
 
       sdkCargoArtifacts = craneLib.buildDepsOnly (
@@ -88,23 +101,20 @@
 
       # Linux only — reverie requires Linux
       sandboxCargoArtifacts =
-        if pkgs.stdenv.isLinux then
+        if pkgs.stdenv.hostPlatform.isLinux then
           craneLib.buildDepsOnly (
             commonArgs
             // {
               src = sandboxSrc;
               pname = "agentfs-sandbox-deps";
-              preBuild = ''
-                mkdir -p ../sdk
-                cp -r ${sdkSrc} ../sdk/rust
-              '';
+              preBuild = sdkPathDeps;
             }
           )
         else
           null;
 
       agentfs-sandbox =
-        if pkgs.stdenv.isLinux then
+        if pkgs.stdenv.hostPlatform.isLinux then
           craneLib.buildPackage (
             commonArgs
             // {
@@ -112,10 +122,7 @@
               cargoArtifacts = sandboxCargoArtifacts;
               pname = "agentfs-sandbox";
 
-              preBuild = ''
-                mkdir -p ../sdk
-                cp -r ${sdkSrc} ../sdk/rust
-              '';
+              preBuild = sdkPathDeps;
 
               doInstallCargoArtifacts = true;
 
@@ -138,14 +145,9 @@
         // {
           src = cliSrc;
           pname = "agentfs-deps";
-          cargoExtraArgs = lib.optionalString (!pkgs.stdenv.isLinux) "--no-default-features";
+          cargoExtraArgs = lib.optionalString (!pkgs.stdenv.hostPlatform.isLinux) "--no-default-features";
           # Cargo resolves all path deps even with --no-default-features
-          preBuild = ''
-            mkdir -p ../sdk
-            cp -r ${sdkSrc} ../sdk/rust
-            mkdir -p ../sandbox
-            cp -r ${sandboxSrc}/* ../sandbox/
-          '';
+          preBuild = allPathDeps;
         }
       );
 
@@ -156,14 +158,9 @@
           cargoArtifacts = cliCargoArtifacts;
           pname = "agentfs";
 
-          cargoExtraArgs = lib.optionalString (!pkgs.stdenv.isLinux) "--no-default-features";
+          cargoExtraArgs = lib.optionalString (!pkgs.stdenv.hostPlatform.isLinux) "--no-default-features";
 
-          preBuild = ''
-            mkdir -p ../sdk
-            cp -r ${sdkSrc} ../sdk/rust
-            mkdir -p ../sandbox
-            cp -r ${sandboxSrc}/* ../sandbox/
-          '';
+          preBuild = allPathDeps;
 
           meta = {
             description = "AgentFS - AI-native distributed filesystem";
@@ -175,10 +172,10 @@
         }
       );
 
-      pyturso = pythonPackages.buildPythonPackage rec {
+      pyturso = pkgs.python3Packages.buildPythonPackage rec {
         pname = "pyturso";
         inherit (hashes.pyturso) version;
-        format = "pyproject";
+        pyproject = true;
 
         src = pkgs.fetchPypi {
           inherit pname version;
@@ -190,13 +187,13 @@
           outputHashes = hashes.pyturso.cargoOutputHashes;
         };
 
-        nativeBuildInputs = with pkgs; [
+        build-system = with pkgs; [
           maturin
           rustPlatform.cargoSetupHook
           rustPlatform.maturinBuildHook
         ];
 
-        propagatedBuildInputs = with pythonPackages; [ typing-extensions ];
+        dependencies = with pkgs.python3Packages; [ typing-extensions ];
 
         doCheck = false; # requires database
 
@@ -207,19 +204,18 @@
         };
       };
 
-      agentfs-sdk-python = pythonPackages.buildPythonPackage rec {
+      agentfs-sdk-python = pkgs.python3Packages.buildPythonPackage rec {
         pname = "agentfs-sdk";
         version = "0.6.0-pre.4";
-        format = "pyproject";
+        pyproject = true;
 
         src = lib.cleanSource "${self}/sdk/python";
 
-        nativeBuildInputs = with pythonPackages; [
+        build-system = with pkgs.python3Packages; [
           setuptools
-          wheel
         ];
 
-        propagatedBuildInputs = [ pyturso ];
+        dependencies = [ pyturso ];
 
         doCheck = false; # requires agentfs server
 
