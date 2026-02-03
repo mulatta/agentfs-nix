@@ -261,10 +261,8 @@
           license = lib.licenses.mit;
         };
       };
-    in
-    {
+
       packages = {
-        default = agentfs;
         inherit
           agentfs
           agentfs-sdk
@@ -273,5 +271,11 @@
           ;
       }
       // lib.optionalAttrs (agentfs-sandbox != null) { inherit agentfs-sandbox; };
+    in
+    {
+      packages = packages // {
+        default = agentfs;
+      };
+      checks = lib.mapAttrs' (name: drv: lib.nameValuePair "pkgs-${name}" drv) packages;
     };
 }
