@@ -1,0 +1,12 @@
+{
+  "pyturso": {
+    "version": "0.4.0rc17",
+    "hash": "sha256-O5pdOcQlwIUzf4Sxw+fP1G6opN5DmlnJoE/G1GU4h30=",
+    "cargoOutputHashes": {
+      "syntect-5.2.0": "sha256-KfKM1VaTW3G236E96F3a8x/GgG6wIbGXrupQvrRrH3Q="
+    }
+  },
+  "typescriptSdk": {
+    "npmDepsHash": "sha256-XqdYzHnhgk6IiqOs16kUs11LOnTIPuEVCTtQthenTcs="
+  }
+}
