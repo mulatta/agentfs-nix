@@ -139,11 +139,10 @@
           src = cliSrc;
           pname = "agentfs-deps";
           cargoExtraArgs = lib.optionalString (!pkgs.stdenv.isLinux) "--no-default-features";
+          # Cargo resolves all path deps even with --no-default-features
           preBuild = ''
             mkdir -p ../sdk
             cp -r ${sdkSrc} ../sdk/rust
-          ''
-          + lib.optionalString pkgs.stdenv.isLinux ''
             mkdir -p ../sandbox
             cp -r ${sandboxSrc}/* ../sandbox/
           '';
@@ -162,8 +161,6 @@
           preBuild = ''
             mkdir -p ../sdk
             cp -r ${sdkSrc} ../sdk/rust
-          ''
-          + lib.optionalString pkgs.stdenv.isLinux ''
             mkdir -p ../sandbox
             cp -r ${sandboxSrc}/* ../sandbox/
           '';
