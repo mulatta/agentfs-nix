@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.6.0] - 2026-02-05
+
+AgentFS is now beta!
+
+### Added
+
+- `agentfs migrate` command for schema upgrades.
+- `agentfs exec` command for running commands in an existing session.
+- `-c` option to `agentfs init` for custom configuration.
+- `--backend` option to `agentfs mount` for selecting mount backend.
+- Local encryption support with `--key` option.
+- POSIX special file support (block devices, character devices, FIFOs, sockets).
+- POSIX file permissions support.
+- NFS hard link support.
+- NFS authentication and permissions.
+
+### Changed
+
+- Switch from path-based to inode-based architecture.
+- Upgrade to Turso 0.4.4.
+- Vendor `fuser` crate.
+- Vendor `nfsserve` crate.
+- Rust SDK: Nanosecond timestamp precision.
+- Rust SDK: Replace anyhow with custom Error type.
+- NFS: Increase mount timeouts to prevent I/O failures.
+
+### Performance
+
+- Rust SDK: Connection pooling.
+- Rust SDK: Use `BEGIN IMMEDIATE` in write path.
+- Rust SDK: Optimized DeltaDirCache operations.
+- Rust SDK: Skip whiteout DELETE when no whiteout exists.
+- FUSE: Optimize create() to use single create_file operation.
+
+### Fixed
+
+- Overlayfs readdir/unlink for delta files in base directories.
+- TypeScript and Python SDK SQLite schema.
+- Rust SDK: Opening a read-only file.
+- Rust SDK: Overlay lookup using wrong delta parent inode.
+- Rust SDK: Overlayfs permissions copy-up.
+- Rust SDK: Sparse files in pwrite.
+- Overlay filesystem whiteout persistence across mounts.
+- NFS: File permissions with NFS backend.
+- NFS: Sticky bit semantics for rename and remove.
+- FUSE: Preserve setuid, setgid, and sticky bits in fillattr.
+- Session join working directory.
+- Stale NFS mounts and session joining.
+- Various POSIX timestamp compliance fixes (ctime on chmod/chown/truncate/link/unlink, parent directory timestamps).
+
+### Documentation
+
+- Document `agentfs exec` command and `agentfs init -c` option.
+
 ## [0.5.3] - 2026-01-10
 
 ### Added
@@ -239,6 +293,7 @@
 - Cross-platform builds (Linux, macOS).
 - Example agent implementations.
 
+[0.6.0]: https://github.com/tursodatabase/agentfs/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/tursodatabase/agentfs/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/tursodatabase/agentfs/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tursodatabase/agentfs/compare/v0.5.0...v0.5.1
