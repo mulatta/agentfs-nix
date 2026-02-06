@@ -141,6 +141,12 @@ const (
 	initFsConfig = `
 		INSERT OR IGNORE INTO fs_config (key, value) VALUES ('chunk_size', ?)`
 
+	initSchemaVersion = `
+		INSERT OR IGNORE INTO fs_config (key, value) VALUES ('schema_version', ?)`
+
+	getSchemaVersion = `
+		SELECT value FROM fs_config WHERE key = 'schema_version'`
+
 	initRootInode = `
 		INSERT OR IGNORE INTO fs_inode (ino, mode, nlink, uid, gid, size, atime, mtime, ctime)
 		VALUES (1, ?, 1, 0, 0, 0, unixepoch(), unixepoch(), unixepoch())`

@@ -41,19 +41,25 @@ const DefaultChunkSize = 4096
 
 // POSIX error codes
 const (
-	EPERM     = 1  // Operation not permitted
-	ENOENT    = 2  // No such file or directory
-	EIO       = 5  // I/O error
-	EBADF     = 9  // Bad file descriptor
-	EACCES    = 13 // Permission denied
-	EEXIST    = 17 // File exists
-	ENOTDIR   = 20 // Not a directory
-	EISDIR    = 21 // Is a directory
-	EINVAL    = 22 // Invalid argument
-	ENOSPC    = 28 // No space left on device
-	ENOSYS    = 38 // Function not implemented
-	ENOTEMPTY = 39 // Directory not empty
-	ELOOP     = 40 // Too many symbolic links
+	EPERM        = 1  // Operation not permitted
+	ENOENT       = 2  // No such file or directory
+	EIO          = 5  // I/O error
+	EBADF        = 9  // Bad file descriptor
+	EACCES       = 13 // Permission denied
+	EEXIST       = 17 // File exists
+	ENOTDIR      = 20 // Not a directory
+	EISDIR       = 21 // Is a directory
+	EINVAL       = 22 // Invalid argument
+	ENOSPC       = 28 // No space left on device
+	ENAMETOOLONG = 36 // File name too long
+	ENOSYS       = 38 // Function not implemented
+	ENOTEMPTY    = 39 // Directory not empty
+	ELOOP        = 40 // Too many symbolic links
+)
+
+// Filesystem limits
+const (
+	MaxNameLen = 255 // Maximum filename length in bytes
 )
 
 // Open flags (matching os package)

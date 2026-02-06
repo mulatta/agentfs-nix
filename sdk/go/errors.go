@@ -48,6 +48,8 @@ func (e *FSError) codeMessage() string {
 		return "function not implemented"
 	case ENOTEMPTY:
 		return "directory not empty"
+	case ENAMETOOLONG:
+		return "file name too long"
 	case ELOOP:
 		return "too many levels of symbolic links"
 	default:
@@ -119,6 +121,35 @@ func ErrNosys(syscall, path string) *FSError {
 // ErrLoop returns an ELOOP error (too many symbolic links)
 func ErrLoop(syscall, path string) *FSError {
 	return &FSError{Code: ELOOP, Syscall: syscall, Path: path}
+}
+
+// ErrNameTooLong returns an ENAMETOOLONG error (file name too long)
+func ErrNameTooLong(syscall, path string) *FSError {
+	return &FSError{Code: ENAMETOOLONG, Syscall: syscall, Path: path}
+}
+
+// ErrRootOperation returns an EPERM error for operations that cannot modify root
+func ErrRootOperation(syscall, path string) *FSError {
+	return &FSError{Code: EPERM, Syscall: syscall, Path: path, Message: "cannot modify root directory"}
+}
+
+// ErrInvalidRename returns an EINVAL error for invalid rename operations
+func ErrInvalidRename(syscall, path string) *FSError {
+	return &FSError{Code: EINVAL, Syscall: syscall, Path: path, Message: "cannot rename directory into its own subtree"}
+}
+
+// ErrNotSymlink returns an EINVAL error when a symlink was expected
+func ErrNotSymlink(syscall, path string) *FSError {
+	return &FSError{Code: EINVAL, Syscall: syscall, Path: path, Message: "not a symbolic link"}
+}
+
+// IsNameTooLong returns true if the error indicates a filename was too long
+func IsNameTooLong(err error) bool {
+	var fsErr *FSError
+	if errors.As(err, &fsErr) {
+		return fsErr.Code == ENAMETOOLONG
+	}
+	return false
 }
 
 // IsNotExist returns true if the error indicates the file does not exist

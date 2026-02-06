@@ -19,8 +19,9 @@ import (
 // AgentFS is the main entry point providing access to filesystem,
 // key-value store, and tool call tracking.
 type AgentFS struct {
-	db   *sql.DB
-	path string
+	db     *sql.DB
+	ownsDB bool // true if we opened the DB and should close it
+	path   string
 
 	// FS provides filesystem operations
 	FS *Filesystem
@@ -30,6 +31,17 @@ type AgentFS struct {
 
 	// Tools provides tool call tracking operations
 	Tools *ToolCalls
+}
+
+// ErrSchemaVersionMismatch is returned when a database was created with an
+// incompatible schema version.
+type ErrSchemaVersionMismatch struct {
+	Found    string
+	Expected string
+}
+
+func (e *ErrSchemaVersionMismatch) Error() string {
+	return fmt.Sprintf("schema version mismatch: found %q, expected %q", e.Found, e.Expected)
 }
 
 // validIDPattern matches valid agent IDs (alphanumeric, hyphens, underscores)
@@ -84,9 +96,67 @@ func Open(ctx context.Context, opts AgentFSOptions) (*AgentFS, error) {
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
+	afs, err := initAgentFS(ctx, db, dbPath, true, opts)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return afs, nil
+}
+
+// OpenWith creates an AgentFS using an existing *sql.DB connection.
+//
+// The caller retains ownership of the database connection. Calling Close()
+// on the returned AgentFS will not close the underlying database.
+//
+// OpenWithOptions can be used to configure cache and chunk size. Pool options
+// are ignored since the connection is externally managed.
+func OpenWith(ctx context.Context, db *sql.DB, opts ...OpenWithOption) (*AgentFS, error) {
+	o := openWithOptions{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	afsOpts := AgentFSOptions{
+		ChunkSize: o.chunkSize,
+		Cache:     o.cache,
+	}
+
+	afs, err := initAgentFS(ctx, db, "", false, afsOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	return afs, nil
+}
+
+// OpenWithOption configures optional settings for OpenWith.
+type OpenWithOption func(*openWithOptions)
+
+type openWithOptions struct {
+	chunkSize int
+	cache     CacheOptions
+}
+
+// WithChunkSize sets the chunk size for file data storage.
+func WithChunkSize(size int) OpenWithOption {
+	return func(o *openWithOptions) {
+		o.chunkSize = size
+	}
+}
+
+// WithCache enables and configures the path resolution cache.
+func WithCache(opts CacheOptions) OpenWithOption {
+	return func(o *openWithOptions) {
+		o.cache = opts
+	}
+}
+
+// initAgentFS contains the shared initialization logic for Open and OpenWith.
+func initAgentFS(ctx context.Context, db *sql.DB, dbPath string, ownsDB bool, opts AgentFSOptions) (*AgentFS, error) {
 	// Initialize schema
 	if err := initSchema(ctx, db); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
@@ -94,6 +164,19 @@ func Open(ctx context.Context, opts AgentFSOptions) (*AgentFS, error) {
 	// These add columns if they don't exist; errors are ignored for existing columns
 	for _, stmt := range nsecMigrations() {
 		db.ExecContext(ctx, stmt) // Ignore errors (column may already exist)
+	}
+
+	// Initialize and validate schema version
+	if _, err := db.ExecContext(ctx, initSchemaVersion, schemaVersion); err != nil {
+		return nil, fmt.Errorf("failed to initialize schema_version: %w", err)
+	}
+
+	var foundVersion string
+	if err := db.QueryRowContext(ctx, getSchemaVersion).Scan(&foundVersion); err != nil {
+		return nil, fmt.Errorf("failed to read schema_version: %w", err)
+	}
+	if foundVersion != schemaVersion {
+		return nil, &ErrSchemaVersionMismatch{Found: foundVersion, Expected: schemaVersion}
 	}
 
 	// Determine chunk size
@@ -104,31 +187,22 @@ func Open(ctx context.Context, opts AgentFSOptions) (*AgentFS, error) {
 
 	// Initialize filesystem config (chunk_size)
 	if _, err := db.ExecContext(ctx, initFsConfig, strconv.Itoa(chunkSize)); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("failed to initialize fs_config: %w", err)
 	}
 
 	// Initialize root inode
 	if _, err := db.ExecContext(ctx, initRootInode, DefaultDirMode); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("failed to initialize root inode: %w", err)
 	}
 
 	// Read actual chunk size from database (may differ if database already existed)
 	var chunkSizeStr string
 	if err := db.QueryRowContext(ctx, getChunkSize).Scan(&chunkSizeStr); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("failed to read chunk_size: %w", err)
 	}
 	actualChunkSize, err := strconv.Atoi(chunkSizeStr)
 	if err != nil {
-		db.Close()
 		return nil, fmt.Errorf("invalid chunk_size value: %w", err)
-	}
-
-	afs := &AgentFS{
-		db:   db,
-		path: dbPath,
 	}
 
 	// Initialize cache if enabled
@@ -138,12 +212,16 @@ func Open(ctx context.Context, opts AgentFSOptions) (*AgentFS, error) {
 		if maxEntries <= 0 {
 			maxEntries = 10000 // Default
 		}
-		var err error
 		pathCache, err = cache.NewLRU(maxEntries, opts.Cache.TTL)
 		if err != nil {
-			db.Close()
 			return nil, fmt.Errorf("failed to initialize cache: %w", err)
 		}
+	}
+
+	afs := &AgentFS{
+		db:     db,
+		ownsDB: ownsDB,
+		path:   dbPath,
 	}
 
 	// Initialize subsystems
@@ -158,14 +236,25 @@ func Open(ctx context.Context, opts AgentFSOptions) (*AgentFS, error) {
 	return afs, nil
 }
 
-// Close closes the database connection.
+// Close closes the AgentFS instance.
+// If the database was opened by Open, the connection is closed.
+// If the database was provided via OpenWith, the connection is not closed.
 func (a *AgentFS) Close() error {
-	return a.db.Close()
+	if a.ownsDB {
+		return a.db.Close()
+	}
+	return nil
 }
 
 // Path returns the path to the underlying database file.
+// Returns an empty string if the AgentFS was created via OpenWith.
 func (a *AgentFS) Path() string {
 	return a.path
+}
+
+// DB returns the underlying *sql.DB connection.
+func (a *AgentFS) DB() *sql.DB {
+	return a.db
 }
 
 // resolveDBPath determines the database file path from options

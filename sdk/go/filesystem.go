@@ -118,6 +118,10 @@ func (fs *Filesystem) Mkdir(ctx context.Context, p string, mode int64) error {
 	parentPath, name := path.Split(p)
 	parentPath = normalizePath(parentPath)
 
+	if err := validateName("mkdir", name); err != nil {
+		return err
+	}
+
 	parentIno, err := fs.resolvePath(ctx, parentPath)
 	if err != nil {
 		return err
@@ -243,6 +247,10 @@ func (fs *Filesystem) WriteFile(ctx context.Context, p string, data []byte, mode
 	parentPath, name := path.Split(p)
 	parentPath = normalizePath(parentPath)
 
+	if err := validateName("write", name); err != nil {
+		return err
+	}
+
 	// Ensure parent directory exists
 	if err := fs.MkdirAll(ctx, parentPath, 0o755); err != nil {
 		return err
@@ -317,7 +325,7 @@ func (fs *Filesystem) WriteFile(ctx context.Context, p string, data []byte, mode
 func (fs *Filesystem) Unlink(ctx context.Context, p string) error {
 	p = normalizePath(p)
 	if p == "/" {
-		return ErrPerm("unlink", p)
+		return ErrRootOperation("unlink", p)
 	}
 
 	parentPath, name := path.Split(p)
@@ -381,7 +389,7 @@ func (fs *Filesystem) Unlink(ctx context.Context, p string) error {
 func (fs *Filesystem) Rmdir(ctx context.Context, p string) error {
 	p = normalizePath(p)
 	if p == "/" {
-		return ErrPerm("rmdir", p)
+		return ErrRootOperation("rmdir", p)
 	}
 
 	parentPath, name := path.Split(p)
@@ -442,7 +450,7 @@ func (fs *Filesystem) Rename(ctx context.Context, oldPath, newPath string) error
 	newPath = normalizePath(newPath)
 
 	if oldPath == "/" || newPath == "/" {
-		return ErrPerm("rename", oldPath)
+		return ErrRootOperation("rename", oldPath)
 	}
 
 	oldParentPath, oldName := path.Split(oldPath)
@@ -450,6 +458,15 @@ func (fs *Filesystem) Rename(ctx context.Context, oldPath, newPath string) error
 
 	newParentPath, newName := path.Split(newPath)
 	newParentPath = normalizePath(newParentPath)
+
+	if err := validateName("rename", newName); err != nil {
+		return err
+	}
+
+	// Prevent renaming a directory into its own subtree
+	if strings.HasPrefix(newPath, oldPath+"/") {
+		return ErrInvalidRename("rename", oldPath)
+	}
 
 	oldParentIno, err := fs.resolvePath(ctx, oldParentPath)
 	if err != nil {
@@ -524,6 +541,11 @@ func (fs *Filesystem) Link(ctx context.Context, existingPath, newPath string) er
 	existingPath = normalizePath(existingPath)
 	newPath = normalizePath(newPath)
 
+	_, newName := path.Split(newPath)
+	if err := validateName("link", newName); err != nil {
+		return err
+	}
+
 	ino, err := fs.resolvePath(ctx, existingPath)
 	if err != nil {
 		return err
@@ -575,6 +597,10 @@ func (fs *Filesystem) Symlink(ctx context.Context, target, linkPath string) erro
 
 	parentPath, name := path.Split(linkPath)
 	parentPath = normalizePath(parentPath)
+
+	if err := validateName("symlink", name); err != nil {
+		return err
+	}
 
 	// Ensure parent exists
 	if err := fs.MkdirAll(ctx, parentPath, 0o755); err != nil {
@@ -634,7 +660,7 @@ func (fs *Filesystem) Readlink(ctx context.Context, p string) (string, error) {
 		return "", err
 	}
 	if !stats.IsSymlink() {
-		return "", ErrInval("readlink", p, "not a symlink")
+		return "", ErrNotSymlink("readlink", p)
 	}
 
 	var target string
@@ -744,6 +770,11 @@ func (fs *Filesystem) Open(ctx context.Context, p string, flags int) (*File, err
 func (fs *Filesystem) Create(ctx context.Context, p string, mode int64) (*File, error) {
 	p = normalizePath(p)
 
+	_, name := path.Split(p)
+	if err := validateName("create", name); err != nil {
+		return nil, err
+	}
+
 	// Create the file (or truncate if exists)
 	if err := fs.WriteFile(ctx, p, nil, mode); err != nil {
 		return nil, err
@@ -760,6 +791,14 @@ func (fs *Filesystem) Create(ctx context.Context, p string, mode int64) (*File, 
 		path:  p,
 		flags: O_RDWR,
 	}, nil
+}
+
+// validateName checks that a filename component is valid.
+func validateName(syscall, name string) error {
+	if len(name) > MaxNameLen {
+		return ErrNameTooLong(syscall, name)
+	}
+	return nil
 }
 
 // Helper functions

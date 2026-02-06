@@ -2,11 +2,15 @@ package agentfs
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestOpen(t *testing.T) {
@@ -898,6 +902,700 @@ func TestErrors(t *testing.T) {
 		err2 := ErrExist("mkdir", "/exists")
 		if IsNotExist(err2) {
 			t.Error("IsNotExist should return false for EEXIST")
+		}
+	})
+}
+
+func TestOpenWith(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("basic usage", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		afs, err := OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith failed: %v", err)
+		}
+
+		// Subsystems should be initialized
+		if afs.FS == nil {
+			t.Fatal("FS is nil")
+		}
+		if afs.KV == nil {
+			t.Fatal("KV is nil")
+		}
+		if afs.Tools == nil {
+			t.Fatal("Tools is nil")
+		}
+
+		// Path should be empty for OpenWith
+		if afs.Path() != "" {
+			t.Errorf("Path() = %q, want empty", afs.Path())
+		}
+
+		// DB should return the same connection
+		if afs.DB() != db {
+			t.Error("DB() did not return the provided connection")
+		}
+	})
+
+	t.Run("close does not close underlying db", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		afs, err := OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith failed: %v", err)
+		}
+
+		// Close the AgentFS
+		if err := afs.Close(); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+
+		// The underlying DB should still be usable
+		var result int
+		if err := db.QueryRowContext(ctx, "SELECT 1").Scan(&result); err != nil {
+			t.Fatalf("DB should still work after AgentFS.Close: %v", err)
+		}
+		if result != 1 {
+			t.Errorf("got %d, want 1", result)
+		}
+	})
+
+	t.Run("filesystem operations work", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		afs, err := OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith failed: %v", err)
+		}
+
+		// Write and read a file
+		if err := afs.FS.WriteFile(ctx, "/hello.txt", []byte("hello"), 0o644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+
+		data, err := afs.FS.ReadFile(ctx, "/hello.txt")
+		if err != nil {
+			t.Fatalf("ReadFile failed: %v", err)
+		}
+		if string(data) != "hello" {
+			t.Errorf("ReadFile = %q, want %q", data, "hello")
+		}
+	})
+
+	t.Run("kv operations work", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		afs, err := OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith failed: %v", err)
+		}
+
+		if err := afs.KV.Set(ctx, "key1", "value1"); err != nil {
+			t.Fatalf("KV.Set failed: %v", err)
+		}
+
+		var val string
+		if err := afs.KV.Get(ctx, "key1", &val); err != nil {
+			t.Fatalf("KV.Get failed: %v", err)
+		}
+		if val != "value1" {
+			t.Errorf("KV.Get = %q, want %q", val, "value1")
+		}
+	})
+
+	t.Run("tool calls work", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		afs, err := OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith failed: %v", err)
+		}
+
+		pending, err := afs.Tools.Start(ctx, "test_tool", nil)
+		if err != nil {
+			t.Fatalf("Tools.Start failed: %v", err)
+		}
+
+		call, err := pending.Success(ctx, "done")
+		if err != nil {
+			t.Fatalf("Success failed: %v", err)
+		}
+		if call.Name != "test_tool" {
+			t.Errorf("call.Name = %q, want %q", call.Name, "test_tool")
+		}
+	})
+
+	t.Run("with chunk size option", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		afs, err := OpenWith(ctx, db, WithChunkSize(8192))
+		if err != nil {
+			t.Fatalf("OpenWith failed: %v", err)
+		}
+
+		if afs.FS.ChunkSize() != 8192 {
+			t.Errorf("ChunkSize() = %d, want 8192", afs.FS.ChunkSize())
+		}
+	})
+
+	t.Run("with cache option", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		afs, err := OpenWith(ctx, db, WithCache(CacheOptions{
+			Enabled:    true,
+			MaxEntries: 500,
+		}))
+		if err != nil {
+			t.Fatalf("OpenWith failed: %v", err)
+		}
+
+		// Cache should be active
+		stats := afs.FS.CacheStats()
+		if stats == nil {
+			t.Fatal("CacheStats() returned nil, cache should be enabled")
+		}
+	})
+
+	t.Run("shared database between two AgentFS instances", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		afs1, err := OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith(1) failed: %v", err)
+		}
+
+		afs2, err := OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith(2) failed: %v", err)
+		}
+
+		// Write from instance 1, read from instance 2
+		if err := afs1.FS.WriteFile(ctx, "/shared.txt", []byte("shared"), 0o644); err != nil {
+			t.Fatalf("WriteFile via afs1 failed: %v", err)
+		}
+
+		data, err := afs2.FS.ReadFile(ctx, "/shared.txt")
+		if err != nil {
+			t.Fatalf("ReadFile via afs2 failed: %v", err)
+		}
+		if string(data) != "shared" {
+			t.Errorf("ReadFile = %q, want %q", data, "shared")
+		}
+	})
+}
+
+func TestOpenClosesDBOnError(t *testing.T) {
+	ctx := context.Background()
+
+	// Open normally first to create a valid database, then tamper with schema version
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	afs, err := Open(ctx, AgentFSOptions{Path: dbPath})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	afs.Close()
+
+	// Tamper with the schema version
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open failed: %v", err)
+	}
+	_, err = db.ExecContext(ctx, "UPDATE fs_config SET value = '9.9' WHERE key = 'schema_version'")
+	if err != nil {
+		t.Fatalf("UPDATE failed: %v", err)
+	}
+	db.Close()
+
+	// Re-opening should fail with schema version mismatch
+	_, err = Open(ctx, AgentFSOptions{Path: dbPath})
+	if err == nil {
+		t.Fatal("Expected error for schema version mismatch")
+	}
+
+	var mismatch *ErrSchemaVersionMismatch
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("Expected ErrSchemaVersionMismatch, got: %v", err)
+	}
+}
+
+func TestSchemaVersionValidation(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("fresh database sets schema version", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		_, err = OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith failed: %v", err)
+		}
+
+		// Verify schema version was set
+		var version string
+		if err := db.QueryRowContext(ctx, "SELECT value FROM fs_config WHERE key = 'schema_version'").Scan(&version); err != nil {
+			t.Fatalf("Failed to query schema_version: %v", err)
+		}
+		if version != schemaVersion {
+			t.Errorf("schema_version = %q, want %q", version, schemaVersion)
+		}
+	})
+
+	t.Run("compatible version succeeds", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		// First open initializes
+		afs1, err := OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith(1) failed: %v", err)
+		}
+		_ = afs1
+
+		// Second open should succeed (same version)
+		_, err = OpenWith(ctx, db)
+		if err != nil {
+			t.Fatalf("OpenWith(2) failed: %v", err)
+		}
+	})
+
+	t.Run("incompatible version fails", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("sql.Open failed: %v", err)
+		}
+		defer db.Close()
+
+		// Initialize schema manually with a different version
+		if err := initSchema(ctx, db); err != nil {
+			t.Fatalf("initSchema failed: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, "INSERT INTO fs_config (key, value) VALUES ('schema_version', '99.0')"); err != nil {
+			t.Fatalf("INSERT failed: %v", err)
+		}
+
+		// OpenWith should fail
+		_, err = OpenWith(ctx, db)
+		if err == nil {
+			t.Fatal("Expected error for incompatible schema version")
+		}
+
+		var mismatch *ErrSchemaVersionMismatch
+		if !errors.As(err, &mismatch) {
+			t.Fatalf("Expected ErrSchemaVersionMismatch, got: %T: %v", err, err)
+		}
+		if mismatch.Found != "99.0" {
+			t.Errorf("Found = %q, want %q", mismatch.Found, "99.0")
+		}
+		if mismatch.Expected != schemaVersion {
+			t.Errorf("Expected = %q, want %q", mismatch.Expected, schemaVersion)
+		}
+	})
+
+	t.Run("error message format", func(t *testing.T) {
+		err := &ErrSchemaVersionMismatch{Found: "0.1", Expected: "0.4"}
+		msg := err.Error()
+		if !strings.Contains(msg, "0.1") || !strings.Contains(msg, "0.4") {
+			t.Errorf("Error message missing versions: %q", msg)
+		}
+	})
+}
+
+func TestErrorVariants(t *testing.T) {
+	t.Run("ErrNameTooLong", func(t *testing.T) {
+		err := ErrNameTooLong("mkdir", "/foo/longname")
+		if err.Code != ENAMETOOLONG {
+			t.Errorf("Code = %d, want %d (ENAMETOOLONG)", err.Code, ENAMETOOLONG)
+		}
+		if err.Syscall != "mkdir" {
+			t.Errorf("Syscall = %q, want %q", err.Syscall, "mkdir")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "file name too long") {
+			t.Errorf("Error message should contain 'file name too long': %q", msg)
+		}
+	})
+
+	t.Run("ErrRootOperation", func(t *testing.T) {
+		err := ErrRootOperation("rmdir", "/")
+		if err.Code != EPERM {
+			t.Errorf("Code = %d, want %d (EPERM)", err.Code, EPERM)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "cannot modify root") {
+			t.Errorf("Error message should contain 'cannot modify root': %q", msg)
+		}
+	})
+
+	t.Run("ErrInvalidRename", func(t *testing.T) {
+		err := ErrInvalidRename("rename", "/foo")
+		if err.Code != EINVAL {
+			t.Errorf("Code = %d, want %d (EINVAL)", err.Code, EINVAL)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "subtree") {
+			t.Errorf("Error message should mention subtree: %q", msg)
+		}
+	})
+
+	t.Run("ErrNotSymlink", func(t *testing.T) {
+		err := ErrNotSymlink("readlink", "/foo")
+		if err.Code != EINVAL {
+			t.Errorf("Code = %d, want %d (EINVAL)", err.Code, EINVAL)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "not a symbolic link") {
+			t.Errorf("Error message should mention 'not a symbolic link': %q", msg)
+		}
+	})
+
+	t.Run("IsNameTooLong", func(t *testing.T) {
+		err := ErrNameTooLong("mkdir", "/toolong")
+		if !IsNameTooLong(err) {
+			t.Error("IsNameTooLong should return true for ENAMETOOLONG errors")
+		}
+		if IsNameTooLong(ErrNoent("stat", "/foo")) {
+			t.Error("IsNameTooLong should return false for ENOENT errors")
+		}
+	})
+
+	t.Run("ENAMETOOLONG constant", func(t *testing.T) {
+		if ENAMETOOLONG != 36 {
+			t.Errorf("ENAMETOOLONG = %d, want 36", ENAMETOOLONG)
+		}
+	})
+
+	t.Run("MaxNameLen constant", func(t *testing.T) {
+		if MaxNameLen != 255 {
+			t.Errorf("MaxNameLen = %d, want 255", MaxNameLen)
+		}
+	})
+
+	t.Run("ENAMETOOLONG in codeMessage", func(t *testing.T) {
+		err := &FSError{Code: ENAMETOOLONG, Syscall: "test", Path: "/x"}
+		msg := err.Error()
+		if !strings.Contains(msg, "file name too long") {
+			t.Errorf("codeMessage for ENAMETOOLONG should produce 'file name too long': %q", msg)
+		}
+	})
+}
+
+func TestNameLengthValidation(t *testing.T) {
+	ctx := context.Background()
+	afs := setupTestDB(t)
+	defer afs.Close()
+	fs := afs.FS
+
+	longName := strings.Repeat("a", MaxNameLen+1) // 256 bytes
+
+	t.Run("Mkdir rejects long name", func(t *testing.T) {
+		err := fs.Mkdir(ctx, "/"+longName, 0o755)
+		if err == nil {
+			t.Fatal("Expected error for long directory name")
+		}
+		if !IsNameTooLong(err) {
+			t.Errorf("Expected ENAMETOOLONG, got: %v", err)
+		}
+	})
+
+	t.Run("Mkdir accepts max length name", func(t *testing.T) {
+		okName := strings.Repeat("b", MaxNameLen)
+		err := fs.Mkdir(ctx, "/"+okName, 0o755)
+		if err != nil {
+			t.Fatalf("Mkdir with 255-byte name should succeed: %v", err)
+		}
+	})
+
+	t.Run("WriteFile rejects long name", func(t *testing.T) {
+		err := fs.WriteFile(ctx, "/"+longName, []byte("data"), 0o644)
+		if err == nil {
+			t.Fatal("Expected error for long file name")
+		}
+		if !IsNameTooLong(err) {
+			t.Errorf("Expected ENAMETOOLONG, got: %v", err)
+		}
+	})
+
+	t.Run("Create rejects long name", func(t *testing.T) {
+		_, err := fs.Create(ctx, "/"+longName, 0o644)
+		if err == nil {
+			t.Fatal("Expected error for long file name")
+		}
+		if !IsNameTooLong(err) {
+			t.Errorf("Expected ENAMETOOLONG, got: %v", err)
+		}
+	})
+
+	t.Run("Link rejects long new name", func(t *testing.T) {
+		if err := fs.WriteFile(ctx, "/link_src.txt", []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+
+		err := fs.Link(ctx, "/link_src.txt", "/"+longName)
+		if err == nil {
+			t.Fatal("Expected error for long link name")
+		}
+		if !IsNameTooLong(err) {
+			t.Errorf("Expected ENAMETOOLONG, got: %v", err)
+		}
+	})
+
+	t.Run("Symlink rejects long link name", func(t *testing.T) {
+		err := fs.Symlink(ctx, "/target", "/"+longName)
+		if err == nil {
+			t.Fatal("Expected error for long symlink name")
+		}
+		if !IsNameTooLong(err) {
+			t.Errorf("Expected ENAMETOOLONG, got: %v", err)
+		}
+	})
+
+	t.Run("Rename rejects long new name", func(t *testing.T) {
+		if err := fs.WriteFile(ctx, "/rename_src.txt", []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+
+		err := fs.Rename(ctx, "/rename_src.txt", "/"+longName)
+		if err == nil {
+			t.Fatal("Expected error for long new name")
+		}
+		if !IsNameTooLong(err) {
+			t.Errorf("Expected ENAMETOOLONG, got: %v", err)
+		}
+	})
+}
+
+func TestRootOperationGuards(t *testing.T) {
+	ctx := context.Background()
+	afs := setupTestDB(t)
+	defer afs.Close()
+	fs := afs.FS
+
+	t.Run("Unlink root", func(t *testing.T) {
+		err := fs.Unlink(ctx, "/")
+		if err == nil {
+			t.Fatal("Expected error when unlinking root")
+		}
+		var fsErr *FSError
+		if !errors.As(err, &fsErr) {
+			t.Fatalf("Expected FSError, got: %T", err)
+		}
+		if fsErr.Code != EPERM {
+			t.Errorf("Code = %d, want %d (EPERM)", fsErr.Code, EPERM)
+		}
+		if !strings.Contains(fsErr.Message, "root") {
+			t.Errorf("Message should mention root: %q", fsErr.Message)
+		}
+	})
+
+	t.Run("Rmdir root", func(t *testing.T) {
+		err := fs.Rmdir(ctx, "/")
+		if err == nil {
+			t.Fatal("Expected error when removing root directory")
+		}
+		var fsErr *FSError
+		if !errors.As(err, &fsErr) {
+			t.Fatalf("Expected FSError, got: %T", err)
+		}
+		if fsErr.Code != EPERM {
+			t.Errorf("Code = %d, want %d (EPERM)", fsErr.Code, EPERM)
+		}
+	})
+
+	t.Run("Rename from root", func(t *testing.T) {
+		err := fs.Rename(ctx, "/", "/newroot")
+		if err == nil {
+			t.Fatal("Expected error when renaming root")
+		}
+		var fsErr *FSError
+		if !errors.As(err, &fsErr) {
+			t.Fatalf("Expected FSError, got: %T", err)
+		}
+		if fsErr.Code != EPERM {
+			t.Errorf("Code = %d, want %d (EPERM)", fsErr.Code, EPERM)
+		}
+	})
+
+	t.Run("Rename to root", func(t *testing.T) {
+		if err := fs.WriteFile(ctx, "/file.txt", []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+
+		err := fs.Rename(ctx, "/file.txt", "/")
+		if err == nil {
+			t.Fatal("Expected error when renaming to root")
+		}
+	})
+}
+
+func TestSubtreeRenamePrevention(t *testing.T) {
+	ctx := context.Background()
+	afs := setupTestDB(t)
+	defer afs.Close()
+	fs := afs.FS
+
+	// Create directory structure: /a/b/c
+	if err := fs.MkdirAll(ctx, "/a/b/c", 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	t.Run("rename dir into own subtree", func(t *testing.T) {
+		err := fs.Rename(ctx, "/a", "/a/b/new_a")
+		if err == nil {
+			t.Fatal("Expected error when renaming directory into its own subtree")
+		}
+		var fsErr *FSError
+		if !errors.As(err, &fsErr) {
+			t.Fatalf("Expected FSError, got: %T: %v", err, err)
+		}
+		if fsErr.Code != EINVAL {
+			t.Errorf("Code = %d, want %d (EINVAL)", fsErr.Code, EINVAL)
+		}
+		if !strings.Contains(fsErr.Message, "subtree") {
+			t.Errorf("Message should mention subtree: %q", fsErr.Message)
+		}
+	})
+
+	t.Run("rename dir into deeply nested subtree", func(t *testing.T) {
+		err := fs.Rename(ctx, "/a", "/a/b/c/moved")
+		if err == nil {
+			t.Fatal("Expected error when renaming into deeply nested subtree")
+		}
+		var fsErr *FSError
+		if !errors.As(err, &fsErr) {
+			t.Fatalf("Expected FSError, got: %v", err)
+		}
+	})
+
+	t.Run("rename dir to sibling is allowed", func(t *testing.T) {
+		// Create /x/child
+		if err := fs.MkdirAll(ctx, "/x/child", 0o755); err != nil {
+			t.Fatalf("MkdirAll failed: %v", err)
+		}
+
+		// Rename /x to /y should work (sibling, not subtree)
+		err := fs.Rename(ctx, "/x", "/y")
+		if err != nil {
+			t.Fatalf("Rename to sibling should succeed: %v", err)
+		}
+
+		// Verify /y/child exists
+		stats, err := fs.Stat(ctx, "/y/child")
+		if err != nil {
+			t.Fatalf("Stat /y/child failed: %v", err)
+		}
+		if !stats.IsDir() {
+			t.Error("/y/child should be a directory")
+		}
+	})
+
+	t.Run("rename file into dir with same prefix is allowed", func(t *testing.T) {
+		// /ab should not be considered a subtree of /a
+		if err := fs.Mkdir(ctx, "/ab", 0o755); err != nil {
+			t.Fatalf("Mkdir failed: %v", err)
+		}
+		if err := fs.WriteFile(ctx, "/a/test.txt", []byte("test"), 0o644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+
+		err := fs.Rename(ctx, "/a/test.txt", "/ab/test.txt")
+		if err != nil {
+			t.Fatalf("Rename to /ab/test.txt should succeed (not a subtree of /a): %v", err)
+		}
+	})
+}
+
+func TestReadlinkOnNonSymlink(t *testing.T) {
+	ctx := context.Background()
+	afs := setupTestDB(t)
+	defer afs.Close()
+	fs := afs.FS
+
+	t.Run("readlink on regular file", func(t *testing.T) {
+		if err := fs.WriteFile(ctx, "/regular.txt", []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+
+		_, err := fs.Readlink(ctx, "/regular.txt")
+		if err == nil {
+			t.Fatal("Expected error when readlink on regular file")
+		}
+
+		var fsErr *FSError
+		if !errors.As(err, &fsErr) {
+			t.Fatalf("Expected FSError, got: %T", err)
+		}
+		if fsErr.Code != EINVAL {
+			t.Errorf("Code = %d, want %d (EINVAL)", fsErr.Code, EINVAL)
+		}
+		if !strings.Contains(fsErr.Message, "not a symbolic link") {
+			t.Errorf("Message should mention 'not a symbolic link': %q", fsErr.Message)
+		}
+	})
+
+	t.Run("readlink on directory", func(t *testing.T) {
+		if err := fs.Mkdir(ctx, "/mydir", 0o755); err != nil {
+			t.Fatalf("Mkdir failed: %v", err)
+		}
+
+		_, err := fs.Readlink(ctx, "/mydir")
+		if err == nil {
+			t.Fatal("Expected error when readlink on directory")
+		}
+	})
+
+	t.Run("readlink on actual symlink succeeds", func(t *testing.T) {
+		if err := fs.Symlink(ctx, "/target", "/mylink"); err != nil {
+			t.Fatalf("Symlink failed: %v", err)
+		}
+
+		target, err := fs.Readlink(ctx, "/mylink")
+		if err != nil {
+			t.Fatalf("Readlink failed: %v", err)
+		}
+		if target != "/target" {
+			t.Errorf("Readlink = %q, want %q", target, "/target")
 		}
 	})
 }
