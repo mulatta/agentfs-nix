@@ -29,6 +29,10 @@
     "./cloudflare": {
       "import": "./dist/integrations/cloudflare/index.js",
       "types": "./dist/integrations/cloudflare/index.d.ts"
+    },
+    "./serverless": {
+      "import": "./dist/integrations/serverless/index.js",
+      "types": "./dist/integrations/serverless/index.d.ts"
     }
   },
   "keywords": [
@@ -56,10 +60,14 @@
     "vitest": "^4.0.1"
   },
   "peerDependencies": {
+    "@tursodatabase/serverless": "^0.2.4",
     "just-bash": ">=2.0.0"
   },
   "peerDependenciesMeta": {
     "just-bash": {
+      "optional": true
+    },
+    "@tursodatabase/serverless": {
       "optional": true
     }
   },
